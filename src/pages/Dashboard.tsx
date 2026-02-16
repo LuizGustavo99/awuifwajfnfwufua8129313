@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { TrendingUp, TrendingDown, Wallet, CreditCard } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import { TrendingUp, TrendingDown, Wallet, PiggyBank } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, CartesianGrid } from "recharts";
 
 interface Transaction {
   id: string;
@@ -23,7 +23,9 @@ interface Category {
 const Dashboard = () => {
   const { user } = useAuth();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [savingsTotal, setSavingsTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -33,12 +35,22 @@ const Dashboard = () => {
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
       const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
 
-      const [txRes, catRes] = await Promise.all([
+      // Last 6 months for evolution chart
+      const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1).toISOString().split("T")[0];
+
+      const [txRes, allTxRes, catRes, savRes] = await Promise.all([
         supabase.from("transactions").select("*").gte("date", startOfMonth).lte("date", endOfMonth).order("date", { ascending: false }),
+        supabase.from("transactions").select("*").gte("date", sixMonthsAgo).order("date", { ascending: false }),
         supabase.from("categories").select("*"),
+        supabase.from("savings").select("amount, type"),
       ]);
       setTransactions(txRes.data || []);
+      setAllTransactions(allTxRes.data || []);
       setCategories(catRes.data || []);
+
+      const savData = savRes.data || [];
+      const total = savData.reduce((sum, s) => sum + (s.type === "deposit" ? Number(s.amount) : -Number(s.amount)), 0);
+      setSavingsTotal(total);
       setLoading(false);
     };
     fetchData();
@@ -51,12 +63,26 @@ const Dashboard = () => {
   const expenseByCategory = categories
     .map((cat) => ({
       name: cat.name,
-      value: transactions
-        .filter((t) => t.type === "expense" && t.category_id === cat.id)
-        .reduce((s, t) => s + Number(t.amount), 0),
+      value: transactions.filter((t) => t.type === "expense" && t.category_id === cat.id).reduce((s, t) => s + Number(t.amount), 0),
       color: cat.color,
     }))
     .filter((c) => c.value > 0);
+
+  // Monthly evolution (last 6 months)
+  const now = new Date();
+  const monthlyEvolution = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+    const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const monthTx = allTransactions.filter((t) => t.date.startsWith(monthKey));
+    const income = monthTx.filter((t) => t.type === "income").reduce((s, t) => s + Number(t.amount), 0);
+    const expense = monthTx.filter((t) => t.type === "expense").reduce((s, t) => s + Number(t.amount), 0);
+    return {
+      month: d.toLocaleDateString("pt-BR", { month: "short" }),
+      income,
+      expense,
+      balance: income - expense,
+    };
+  });
 
   // Last 7 days chart
   const last7Days = Array.from({ length: 7 }, (_, i) => {
@@ -71,13 +97,15 @@ const Dashboard = () => {
     };
   });
 
-  const fmt = (v: number) =>
-    v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const fmt = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-  const cards = [
+  const tooltipStyle = { background: "hsl(220 18% 12%)", border: "1px solid hsl(220 14% 18%)", borderRadius: "8px", color: "hsl(210 20% 92%)" };
+
+  const summaryCards = [
     { label: "Receitas", value: totalIncome, icon: TrendingUp, className: "text-income" },
     { label: "Despesas", value: totalExpense, icon: TrendingDown, className: "text-expense" },
     { label: "Saldo", value: balance, icon: Wallet, className: balance >= 0 ? "text-income" : "text-expense" },
+    { label: "Guardado", value: savingsTotal, icon: PiggyBank, className: "text-accent" },
   ];
 
   const recentTx = transactions.slice(0, 5);
@@ -86,8 +114,8 @@ const Dashboard = () => {
     return (
       <div className="space-y-4">
         <h1 className="text-xl font-bold text-foreground">Dashboard</h1>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {[1, 2, 3].map((i) => (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => (
             <div key={i} className="glass rounded-xl p-5 h-24 animate-pulse" />
           ))}
         </div>
@@ -100,33 +128,32 @@ const Dashboard = () => {
       <h1 className="text-xl font-bold text-foreground">Dashboard</h1>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {cards.map((c) => (
-          <div key={c.label} className="glass rounded-xl p-5 space-y-2">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {summaryCards.map((c) => (
+          <div key={c.label} className="glass rounded-xl p-4 sm:p-5 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">{c.label}</span>
+              <span className="text-xs sm:text-sm text-muted-foreground">{c.label}</span>
               <c.icon className={`w-4 h-4 ${c.className}`} />
             </div>
-            <p className={`text-2xl font-bold ${c.className}`}>{fmt(c.value)}</p>
+            <p className={`text-lg sm:text-2xl font-bold ${c.className}`}>{fmt(c.value)}</p>
           </div>
         ))}
       </div>
 
-      {/* Charts */}
+      {/* Charts row 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="glass rounded-xl p-5">
-          <h3 className="text-sm font-medium text-foreground mb-4">Últimos 7 dias</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={last7Days}>
-              <XAxis dataKey="day" tick={{ fill: "hsl(215 12% 50%)", fontSize: 12 }} axisLine={false} tickLine={false} />
+          <h3 className="text-sm font-medium text-foreground mb-4">Evolução mensal (6 meses)</h3>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={monthlyEvolution}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(220 14% 18%)" />
+              <XAxis dataKey="month" tick={{ fill: "hsl(215 12% 50%)", fontSize: 12 }} axisLine={false} tickLine={false} />
               <YAxis hide />
-              <Tooltip
-                contentStyle={{ background: "hsl(220 18% 12%)", border: "1px solid hsl(220 14% 18%)", borderRadius: "8px", color: "hsl(210 20% 92%)" }}
-                formatter={(value: number) => fmt(value)}
-              />
-              <Bar dataKey="income" fill="hsl(160 84% 39%)" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="expense" fill="hsl(0 72% 51%)" radius={[4, 4, 0, 0]} />
-            </BarChart>
+              <Tooltip contentStyle={tooltipStyle} formatter={(value: number) => fmt(value)} />
+              <Line type="monotone" dataKey="income" stroke="hsl(160 84% 39%)" strokeWidth={2} dot={{ r: 4, fill: "hsl(160 84% 39%)" }} name="Receitas" />
+              <Line type="monotone" dataKey="expense" stroke="hsl(0 72% 51%)" strokeWidth={2} dot={{ r: 4, fill: "hsl(0 72% 51%)" }} name="Despesas" />
+              <Line type="monotone" dataKey="balance" stroke="hsl(200 80% 50%)" strokeWidth={2} dot={{ r: 4, fill: "hsl(200 80% 50%)" }} name="Saldo" strokeDasharray="5 5" />
+            </LineChart>
           </ResponsiveContainer>
         </div>
 
@@ -141,7 +168,7 @@ const Dashboard = () => {
                       <Cell key={i} fill={entry.color} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(value: number) => fmt(value)} contentStyle={{ background: "hsl(220 18% 12%)", border: "1px solid hsl(220 14% 18%)", borderRadius: "8px", color: "hsl(210 20% 92%)" }} />
+                  <Tooltip formatter={(value: number) => fmt(value)} contentStyle={tooltipStyle} />
                 </PieChart>
               </ResponsiveContainer>
               <div className="space-y-2">
@@ -149,6 +176,7 @@ const Dashboard = () => {
                   <div key={c.name} className="flex items-center gap-2 text-xs">
                     <div className="w-3 h-3 rounded-full" style={{ background: c.color }} />
                     <span className="text-muted-foreground">{c.name}</span>
+                    <span className="text-foreground font-medium">{fmt(c.value)}</span>
                   </div>
                 ))}
               </div>
@@ -157,6 +185,20 @@ const Dashboard = () => {
             <p className="text-muted-foreground text-sm">Sem dados este mês</p>
           )}
         </div>
+      </div>
+
+      {/* Charts row 2 */}
+      <div className="glass rounded-xl p-5">
+        <h3 className="text-sm font-medium text-foreground mb-4">Últimos 7 dias</h3>
+        <ResponsiveContainer width="100%" height={180}>
+          <BarChart data={last7Days}>
+            <XAxis dataKey="day" tick={{ fill: "hsl(215 12% 50%)", fontSize: 12 }} axisLine={false} tickLine={false} />
+            <YAxis hide />
+            <Tooltip contentStyle={tooltipStyle} formatter={(value: number) => fmt(value)} />
+            <Bar dataKey="income" fill="hsl(160 84% 39%)" radius={[4, 4, 0, 0]} name="Receitas" />
+            <Bar dataKey="expense" fill="hsl(0 72% 51%)" radius={[4, 4, 0, 0]} name="Despesas" />
+          </BarChart>
+        </ResponsiveContainer>
       </div>
 
       {/* Recent transactions */}

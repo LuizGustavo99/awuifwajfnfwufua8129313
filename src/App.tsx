@@ -12,6 +12,7 @@ import Transactions from "./pages/Transactions";
 import Categories from "./pages/Categories";
 import Cards from "./pages/Cards";
 import SettingsPage from "./pages/Settings";
+import Savings from "./pages/Savings";
 import NotFound from "./pages/NotFound";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -68,6 +69,7 @@ const AppRoutes = () => {
         <Route path="/transactions" element={<Transactions />} />
         <Route path="/categories" element={<Categories />} />
         <Route path="/cards" element={<Cards />} />
+        <Route path="/savings" element={<Savings />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
