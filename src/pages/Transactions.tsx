@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -6,9 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Trash2, Search, Filter } from "lucide-react";
+import { Plus, Trash2, Search, Filter, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
+import { exportTransactionsCSV, parseNubankCSV } from "@/lib/csv-utils";
 
 interface Transaction {
   id: string;
@@ -44,6 +45,8 @@ const Transactions = () => {
   const [cards, setCards] = useState<Card[]>([]);
   const [open, setOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Filters
   const [filterMonth, setFilterMonth] = useState(() => {
@@ -163,6 +166,69 @@ const Transactions = () => {
     fetchData();
   };
 
+  const handleExport = () => {
+    const data = filtered.map((tx) => ({
+      ...tx,
+      categoryName: categories.find((c) => c.id === tx.category_id)?.name || "",
+      cardName: cards.find((c) => c.id === tx.card_id)?.name || "",
+    }));
+    const [y, m] = filterMonth.split("-");
+    exportTransactionsCSV(data, `transacoes_${y}-${m}.csv`);
+    toast.success("Relatório exportado!");
+  };
+
+  const handleImportClick = () => fileInputRef.current?.click();
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const parsed = parseNubankCSV(text);
+
+      if (parsed.length === 0) {
+        toast.error("Nenhuma transação encontrada no arquivo");
+        return;
+      }
+
+      // Find or use first expense card as default for Nubank import
+      const nubankCard = cards.find((c) => c.name.toLowerCase().includes("nubank"));
+
+      const rows = parsed.map((row) => ({
+        user_id: user.id,
+        description: row.description,
+        amount: row.amount,
+        type: "expense" as const,
+        date: row.date,
+        category_id: null,
+        card_id: nubankCard?.id || null,
+      }));
+
+      // Insert in batches of 50
+      let inserted = 0;
+      for (let i = 0; i < rows.length; i += 50) {
+        const batch = rows.slice(i, i + 50);
+        const { error } = await supabase.from("transactions").insert(batch);
+        if (error) {
+          toast.error(`Erro ao importar lote ${Math.floor(i / 50) + 1}`);
+          console.error(error);
+          break;
+        }
+        inserted += batch.length;
+      }
+
+      toast.success(`${inserted} transações importadas!`);
+      fetchData();
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao processar arquivo");
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
   const fmt = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   const filteredCats = categories.filter((c) => c.type === type);
 
@@ -172,68 +238,84 @@ const Transactions = () => {
     <div className="space-y-4 animate-fade-in">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-foreground">Transações</h1>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button size="sm"><Plus className="w-4 h-4 mr-1" />Nova</Button>
-          </DialogTrigger>
-          <DialogContent className="bg-card border-border max-h-[90vh] overflow-y-auto">
-            <DialogHeader><DialogTitle>Nova Transação</DialogTitle></DialogHeader>
-            <div className="space-y-4 pt-2">
-              <div className="flex gap-2">
-                <Button variant={type === "expense" ? "default" : "outline"} size="sm" onClick={() => setType("expense")} className={type === "expense" ? "gradient-expense text-foreground" : ""}>Despesa</Button>
-                <Button variant={type === "income" ? "default" : "outline"} size="sm" onClick={() => setType("income")} className={type === "income" ? "gradient-income text-foreground" : ""}>Receita</Button>
-              </div>
-              <div className="space-y-2">
-                <Label>Descrição</Label>
-                <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Ex: Supermercado" className="bg-muted" />
-              </div>
-              <div className="space-y-2">
-                <Label>Valor (R$)</Label>
-                <Input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0,00" className="bg-muted" />
-              </div>
-              <div className="space-y-2">
-                <Label>Data</Label>
-                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="bg-muted" />
-              </div>
-              <div className="space-y-2">
-                <Label>Categoria</Label>
-                <Select value={categoryId} onValueChange={setCategoryId}>
-                  <SelectTrigger className="bg-muted"><SelectValue placeholder="Selecione" /></SelectTrigger>
-                  <SelectContent>
-                    {filteredCats.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.icon} {c.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {type === "expense" && (
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={handleImportFile}
+          />
+          <Button variant="outline" size="sm" onClick={handleImportClick} disabled={importing}>
+            <Upload className="w-4 h-4 mr-1" />
+            {importing ? "Importando..." : "Importar"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}>
+            <Download className="w-4 h-4 mr-1" />Exportar
+          </Button>
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm"><Plus className="w-4 h-4 mr-1" />Nova</Button>
+            </DialogTrigger>
+            <DialogContent className="bg-card border-border max-h-[90vh] overflow-y-auto">
+              <DialogHeader><DialogTitle>Nova Transação</DialogTitle></DialogHeader>
+              <div className="space-y-4 pt-2">
+                <div className="flex gap-2">
+                  <Button variant={type === "expense" ? "default" : "outline"} size="sm" onClick={() => setType("expense")} className={type === "expense" ? "gradient-expense text-foreground" : ""}>Despesa</Button>
+                  <Button variant={type === "income" ? "default" : "outline"} size="sm" onClick={() => setType("income")} className={type === "income" ? "gradient-income text-foreground" : ""}>Receita</Button>
+                </div>
                 <div className="space-y-2">
-                  <Label>Cartão (opcional)</Label>
-                  <Select value={cardId} onValueChange={setCardId}>
-                    <SelectTrigger className="bg-muted"><SelectValue placeholder="Sem cartão" /></SelectTrigger>
+                  <Label>Descrição</Label>
+                  <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Ex: Supermercado" className="bg-muted" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Valor (R$)</Label>
+                  <Input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0,00" className="bg-muted" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Data</Label>
+                  <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="bg-muted" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Categoria</Label>
+                  <Select value={categoryId} onValueChange={setCategoryId}>
+                    <SelectTrigger className="bg-muted"><SelectValue placeholder="Selecione" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">Sem cartão</SelectItem>
-                      {cards.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      {filteredCats.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{c.icon} {c.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
-              )}
-              <div className="flex items-center gap-2">
-                <Switch checked={isInstallment} onCheckedChange={setIsInstallment} />
-                <Label>Parcelado</Label>
-              </div>
-              {isInstallment && (
-                <div className="space-y-2">
-                  <Label>Nº de parcelas</Label>
-                  <Input type="number" min="2" max="48" value={totalInstallments} onChange={(e) => setTotalInstallments(e.target.value)} className="bg-muted" />
+                {type === "expense" && (
+                  <div className="space-y-2">
+                    <Label>Cartão (opcional)</Label>
+                    <Select value={cardId} onValueChange={setCardId}>
+                      <SelectTrigger className="bg-muted"><SelectValue placeholder="Sem cartão" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Sem cartão</SelectItem>
+                        {cards.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <Switch checked={isInstallment} onCheckedChange={setIsInstallment} />
+                  <Label>Parcelado</Label>
                 </div>
-              )}
-              <Button onClick={handleAdd} className="w-full">Salvar</Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+                {isInstallment && (
+                  <div className="space-y-2">
+                    <Label>Nº de parcelas</Label>
+                    <Input type="number" min="2" max="48" value={totalInstallments} onChange={(e) => setTotalInstallments(e.target.value)} className="bg-muted" />
+                  </div>
+                )}
+                <Button onClick={handleAdd} className="w-full">Salvar</Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {/* Filters bar */}
