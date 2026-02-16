@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from "react-router-dom";
-import { LayoutDashboard, ArrowLeftRight, Tag, CreditCard, Settings, LogOut } from "lucide-react";
+import { LayoutDashboard, ArrowLeftRight, Tag, CreditCard, Settings, LogOut, PiggyBank } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
 const navItems = [
@@ -7,7 +7,8 @@ const navItems = [
   { to: "/transactions", icon: ArrowLeftRight, label: "Transações" },
   { to: "/categories", icon: Tag, label: "Categorias" },
   { to: "/cards", icon: CreditCard, label: "Cartões" },
-  { to: "/settings", icon: Settings, label: "Configurações" },
+  { to: "/savings", icon: PiggyBank, label: "Poupança" },
+  { to: "/settings", icon: Settings, label: "Config." },
 ];
 
 const AppLayout = ({ children }: { children: React.ReactNode }) => {
