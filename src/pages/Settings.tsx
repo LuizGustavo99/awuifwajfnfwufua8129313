@@ -178,7 +178,7 @@ const SettingsPage = () => {
       {/* Account */}
       <div className="pt-4 border-t border-border">
         <h2 className="text-sm font-medium text-muted-foreground mb-3">Conta</h2>
-        <p className="text-sm text-foreground mb-3">{user?.email}</p>
+        <p className="text-sm text-foreground mb-3">{user?.user_metadata?.display_name || "Usuário"}</p>
         <Button variant="outline" size="sm" onClick={signOut} className="text-destructive">Sair da conta</Button>
       </div>
     </div>

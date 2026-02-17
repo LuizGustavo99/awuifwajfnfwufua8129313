@@ -6,17 +6,20 @@ import { Label } from "@/components/ui/label";
 import { Wallet, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
+const toEmail = (username: string) =>
+  `${username.toLowerCase().replace(/\s+/g, ".")}@fincontrol.local`;
+
 const Setup = () => {
   const [users, setUsers] = useState([
-    { name: "", email: "", password: "" },
-    { name: "", email: "", password: "" },
+    { name: "", password: "" },
+    { name: "", password: "" },
   ]);
   const [loading, setLoading] = useState(false);
   const [created, setCreated] = useState(0);
 
   const handleCreate = async () => {
     for (const u of users) {
-      if (!u.email.trim() || !u.password.trim() || !u.name.trim()) {
+      if (!u.name.trim() || !u.password.trim()) {
         toast.error("Preencha todos os campos dos 2 usuários");
         return;
       }
@@ -26,13 +29,19 @@ const Setup = () => {
       }
     }
 
+    if (users[0].name.trim().toLowerCase() === users[1].name.trim().toLowerCase()) {
+      toast.error("Os nomes de usuário devem ser diferentes");
+      return;
+    }
+
     setLoading(true);
     let count = 0;
     for (const u of users) {
+      const email = toEmail(u.name.trim());
       const { error } = await supabase.auth.signUp({
-        email: u.email,
+        email,
         password: u.password,
-        options: { data: { display_name: u.name } },
+        options: { data: { display_name: u.name.trim() } },
       });
       if (error) {
         toast.error(`Erro ao criar ${u.name}: ${error.message}`);
@@ -43,7 +52,6 @@ const Setup = () => {
     setCreated(count);
     if (count === 2) {
       toast.success("Usuários criados! Faça login para continuar.");
-      // sign out so they can login
       await supabase.auth.signOut();
     }
     setLoading(false);
@@ -83,27 +91,13 @@ const Setup = () => {
                 Usuário {i + 1}
               </div>
               <div className="space-y-2">
-                <Label>Nome</Label>
+                <Label>Nome de usuário</Label>
                 <Input
-                  placeholder="Nome"
+                  placeholder="Ex: Luiz"
                   value={user.name}
                   onChange={(e) => {
                     const copy = [...users];
                     copy[i].name = e.target.value;
-                    setUsers(copy);
-                  }}
-                  className="bg-muted border-border"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Email</Label>
-                <Input
-                  type="email"
-                  placeholder="email@exemplo.com"
-                  value={user.email}
-                  onChange={(e) => {
-                    const copy = [...users];
-                    copy[i].email = e.target.value;
                     setUsers(copy);
                   }}
                   className="bg-muted border-border"
