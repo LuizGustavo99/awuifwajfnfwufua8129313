@@ -6,21 +6,25 @@ import { Label } from "@/components/ui/label";
 import { Wallet } from "lucide-react";
 import { toast } from "sonner";
 
+const toEmail = (username: string) =>
+  `${username.toLowerCase().replace(/\s+/g, ".")}@fincontrol.local`;
+
 const Login = () => {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !password.trim()) {
+    if (!username.trim() || !password.trim()) {
       toast.error("Preencha todos os campos");
       return;
     }
     setLoading(true);
+    const email = toEmail(username.trim());
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
-      toast.error("Credenciais inválidas");
+      toast.error("Usuário ou senha inválidos");
     }
     setLoading(false);
   };
@@ -38,13 +42,13 @@ const Login = () => {
 
         <form onSubmit={handleLogin} className="space-y-4 glass rounded-xl p-6">
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="username">Usuário</Label>
             <Input
-              id="email"
-              type="email"
-              placeholder="seu@email.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              id="username"
+              type="text"
+              placeholder="Seu nome de usuário"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               className="bg-muted border-border"
             />
           </div>

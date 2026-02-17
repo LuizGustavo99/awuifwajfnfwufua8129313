@@ -14,7 +14,7 @@ const navItems = [
 const AppLayout = ({ children }: { children: React.ReactNode }) => {
   const { user, signOut } = useAuth();
   const location = useLocation();
-  const displayName = user?.user_metadata?.display_name || user?.email?.split("@")[0] || "Usuário";
+  const displayName = user?.user_metadata?.display_name || "Usuário";
 
   return (
     <div className="min-h-screen bg-background flex flex-col md:flex-row">
