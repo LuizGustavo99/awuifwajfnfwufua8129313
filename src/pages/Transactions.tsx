@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Trash2, Search, Filter, Download, Upload } from "lucide-react";
+import { Plus, Trash2, Search, Filter, Download, Upload, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { exportTransactionsCSV, parseNubankCSV } from "@/lib/csv-utils";
@@ -47,6 +47,7 @@ const Transactions = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Filters
   const [filterMonth, setFilterMonth] = useState(() => {
@@ -86,7 +87,6 @@ const Transactions = () => {
 
   useEffect(() => { fetchData(); }, [user, filterMonth]);
 
-  // Apply client-side filters
   const filtered = transactions.filter((tx) => {
     if (filterType !== "all" && tx.type !== filterType) return false;
     if (filterCategory !== "all" && tx.category_id !== filterCategory) return false;
@@ -102,62 +102,71 @@ const Transactions = () => {
     return sum + (tx.type === "income" ? Number(tx.amount) : -Number(tx.amount));
   }, 0);
 
-  const handleAdd = async () => {
-    if (!desc.trim() || !amount.trim()) {
-      toast.error("Preencha descrição e valor");
-      return;
-    }
-    const amountNum = parseFloat(amount.replace(",", "."));
-    if (isNaN(amountNum) || amountNum <= 0) {
-      toast.error("Valor inválido");
-      return;
-    }
-
-    if (isInstallment && parseInt(totalInstallments) > 1) {
-      const groupId = crypto.randomUUID();
-      const total = parseInt(totalInstallments);
-      const installmentAmount = amountNum / total;
-      const baseDate = new Date(date + "T00:00:00");
-
-      const rows = Array.from({ length: total }, (_, i) => {
-        const d = new Date(baseDate);
-        d.setMonth(d.getMonth() + i);
-        return {
-          user_id: user!.id,
-          description: `${desc} (${i + 1}/${total})`,
-          amount: Math.round(installmentAmount * 100) / 100,
-          type,
-          date: d.toISOString().split("T")[0],
-          category_id: categoryId || null,
-          card_id: cardId || null,
-          is_installment: true,
-          total_installments: total,
-          current_installment: i + 1,
-          installment_group_id: groupId,
-        };
-      });
-
-      const { error } = await supabase.from("transactions").insert(rows);
-      if (error) { toast.error("Erro ao salvar"); return; }
-    } else {
-      const { error } = await supabase.from("transactions").insert({
-        user_id: user!.id, description: desc, amount: amountNum, type, date,
-        category_id: categoryId || null, card_id: cardId || null,
-      });
-      if (error) { toast.error("Erro ao salvar"); return; }
-    }
-
-    toast.success("Transação adicionada!");
-    setOpen(false);
-    resetForm();
-    fetchData();
-  };
-
   const resetForm = () => {
     setDesc(""); setAmount(""); setType("expense");
     setDate(new Date().toISOString().split("T")[0]);
     setCategoryId(""); setCardId("");
     setIsInstallment(false); setTotalInstallments("2");
+    setEditingId(null);
+  };
+
+  const openEdit = (tx: Transaction) => {
+    setEditingId(tx.id);
+    setDesc(tx.description);
+    setAmount(String(tx.amount));
+    setType(tx.type as "income" | "expense");
+    setDate(tx.date);
+    setCategoryId(tx.category_id || "");
+    setCardId(tx.card_id || "");
+    setIsInstallment(tx.is_installment || false);
+    setTotalInstallments(String(tx.total_installments || 2));
+    setOpen(true);
+  };
+
+  const handleSave = async () => {
+    if (!desc.trim() || !amount.trim()) { toast.error("Preencha descrição e valor"); return; }
+    const amountNum = parseFloat(amount.replace(",", "."));
+    if (isNaN(amountNum) || amountNum <= 0) { toast.error("Valor inválido"); return; }
+
+    if (editingId) {
+      const { error } = await supabase.from("transactions").update({
+        description: desc.trim(), amount: amountNum, type, date,
+        category_id: categoryId || null, card_id: cardId || null,
+      }).eq("id", editingId);
+      if (error) { toast.error("Erro ao atualizar"); return; }
+      toast.success("Transação atualizada!");
+    } else {
+      if (isInstallment && parseInt(totalInstallments) > 1) {
+        const groupId = crypto.randomUUID();
+        const total = parseInt(totalInstallments);
+        const installmentAmount = amountNum / total;
+        const baseDate = new Date(date + "T00:00:00");
+        const rows = Array.from({ length: total }, (_, i) => {
+          const d = new Date(baseDate);
+          d.setMonth(d.getMonth() + i);
+          return {
+            user_id: user!.id, description: `${desc} (${i + 1}/${total})`,
+            amount: Math.round(installmentAmount * 100) / 100, type,
+            date: d.toISOString().split("T")[0], category_id: categoryId || null,
+            card_id: cardId || null, is_installment: true,
+            total_installments: total, current_installment: i + 1,
+            installment_group_id: groupId,
+          };
+        });
+        const { error } = await supabase.from("transactions").insert(rows);
+        if (error) { toast.error("Erro ao salvar"); return; }
+      } else {
+        const { error } = await supabase.from("transactions").insert({
+          user_id: user!.id, description: desc, amount: amountNum, type, date,
+          category_id: categoryId || null, card_id: cardId || null,
+        });
+        if (error) { toast.error("Erro ao salvar"); return; }
+      }
+      toast.success("Transação adicionada!");
+    }
+    setOpen(false);
+    resetForm();
+    fetchData();
   };
 
   const handleDelete = async (id: string) => {
@@ -182,43 +191,24 @@ const Transactions = () => {
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user) return;
-
     setImporting(true);
     try {
       const text = await file.text();
       const parsed = parseNubankCSV(text);
-
-      if (parsed.length === 0) {
-        toast.error("Nenhuma transação encontrada no arquivo");
-        return;
-      }
-
-      // Find or use first expense card as default for Nubank import
+      if (parsed.length === 0) { toast.error("Nenhuma transação encontrada no arquivo"); return; }
       const nubankCard = cards.find((c) => c.name.toLowerCase().includes("nubank"));
-
       const rows = parsed.map((row) => ({
-        user_id: user.id,
-        description: row.description,
-        amount: row.amount,
-        type: "expense" as const,
-        date: row.date,
-        category_id: null,
-        card_id: nubankCard?.id || null,
+        user_id: user.id, description: row.description, amount: row.amount,
+        type: "expense" as const, date: row.date,
+        category_id: null, card_id: nubankCard?.id || null,
       }));
-
-      // Insert in batches of 50
       let inserted = 0;
       for (let i = 0; i < rows.length; i += 50) {
         const batch = rows.slice(i, i + 50);
         const { error } = await supabase.from("transactions").insert(batch);
-        if (error) {
-          toast.error(`Erro ao importar lote ${Math.floor(i / 50) + 1}`);
-          console.error(error);
-          break;
-        }
+        if (error) { toast.error(`Erro ao importar lote ${Math.floor(i / 50) + 1}`); break; }
         inserted += batch.length;
       }
-
       toast.success(`${inserted} transações importadas!`);
       fetchData();
     } catch (err: any) {
@@ -231,7 +221,6 @@ const Transactions = () => {
 
   const fmt = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   const filteredCats = categories.filter((c) => c.type === type);
-
   const activeFilters = [filterType !== "all", filterCategory !== "all", filterCard !== "all", searchText !== ""].filter(Boolean).length;
 
   return (
@@ -239,26 +228,19 @@ const Transactions = () => {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-foreground">Transações</h1>
         <div className="flex items-center gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv"
-            className="hidden"
-            onChange={handleImportFile}
-          />
+          <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleImportFile} />
           <Button variant="outline" size="sm" onClick={handleImportClick} disabled={importing}>
-            <Upload className="w-4 h-4 mr-1" />
-            {importing ? "Importando..." : "Importar"}
+            <Upload className="w-4 h-4 mr-1" />{importing ? "..." : "Importar"}
           </Button>
           <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}>
             <Download className="w-4 h-4 mr-1" />Exportar
           </Button>
-          <Dialog open={open} onOpenChange={setOpen}>
+          <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) resetForm(); }}>
             <DialogTrigger asChild>
               <Button size="sm"><Plus className="w-4 h-4 mr-1" />Nova</Button>
             </DialogTrigger>
             <DialogContent className="bg-card border-border max-h-[90vh] overflow-y-auto">
-              <DialogHeader><DialogTitle>Nova Transação</DialogTitle></DialogHeader>
+              <DialogHeader><DialogTitle>{editingId ? "Editar Transação" : "Nova Transação"}</DialogTitle></DialogHeader>
               <div className="space-y-4 pt-2">
                 <div className="flex gap-2">
                   <Button variant={type === "expense" ? "default" : "outline"} size="sm" onClick={() => setType("expense")} className={type === "expense" ? "gradient-expense text-foreground" : ""}>Despesa</Button>
@@ -294,24 +276,26 @@ const Transactions = () => {
                       <SelectTrigger className="bg-muted"><SelectValue placeholder="Sem cartão" /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">Sem cartão</SelectItem>
-                        {cards.map((c) => (
-                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                        ))}
+                        {cards.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
                       </SelectContent>
                     </Select>
                   </div>
                 )}
-                <div className="flex items-center gap-2">
-                  <Switch checked={isInstallment} onCheckedChange={setIsInstallment} />
-                  <Label>Parcelado</Label>
-                </div>
-                {isInstallment && (
-                  <div className="space-y-2">
-                    <Label>Nº de parcelas</Label>
-                    <Input type="number" min="2" max="48" value={totalInstallments} onChange={(e) => setTotalInstallments(e.target.value)} className="bg-muted" />
-                  </div>
+                {!editingId && (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <Switch checked={isInstallment} onCheckedChange={setIsInstallment} />
+                      <Label>Parcelado</Label>
+                    </div>
+                    {isInstallment && (
+                      <div className="space-y-2">
+                        <Label>Nº de parcelas</Label>
+                        <Input type="number" min="2" max="48" value={totalInstallments} onChange={(e) => setTotalInstallments(e.target.value)} className="bg-muted" />
+                      </div>
+                    )}
+                  </>
                 )}
-                <Button onClick={handleAdd} className="w-full">Salvar</Button>
+                <Button onClick={handleSave} className="w-full">{editingId ? "Atualizar" : "Salvar"}</Button>
               </div>
             </DialogContent>
           </Dialog>
@@ -320,20 +304,9 @@ const Transactions = () => {
 
       {/* Filters bar */}
       <div className="flex flex-wrap items-center gap-2">
-        <Input
-          type="month"
-          value={filterMonth}
-          onChange={(e) => setFilterMonth(e.target.value)}
-          className="bg-muted w-auto"
-        />
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setShowFilters(!showFilters)}
-          className={activeFilters > 0 ? "border-primary text-primary" : ""}
-        >
-          <Filter className="w-4 h-4 mr-1" />
-          Filtros{activeFilters > 0 ? ` (${activeFilters})` : ""}
+        <Input type="month" value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="bg-muted w-auto" />
+        <Button variant="outline" size="sm" onClick={() => setShowFilters(!showFilters)} className={activeFilters > 0 ? "border-primary text-primary" : ""}>
+          <Filter className="w-4 h-4 mr-1" />Filtros{activeFilters > 0 ? ` (${activeFilters})` : ""}
         </Button>
       </div>
 
@@ -341,12 +314,7 @@ const Transactions = () => {
         <div className="glass rounded-xl p-4 space-y-3 animate-fade-in">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Buscar por descrição..."
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              className="bg-muted pl-9"
-            />
+            <Input placeholder="Buscar por descrição..." value={searchText} onChange={(e) => setSearchText(e.target.value)} className="bg-muted pl-9" />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Select value={filterType} onValueChange={setFilterType}>
@@ -361,9 +329,7 @@ const Transactions = () => {
               <SelectTrigger className="bg-muted"><SelectValue placeholder="Categoria" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas categorias</SelectItem>
-                {categories.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>{c.icon} {c.name}</SelectItem>
-                ))}
+                {categories.map((c) => (<SelectItem key={c.id} value={c.id}>{c.icon} {c.name}</SelectItem>))}
               </SelectContent>
             </Select>
             <Select value={filterCard} onValueChange={setFilterCard}>
@@ -371,29 +337,21 @@ const Transactions = () => {
               <SelectContent>
                 <SelectItem value="all">Todos cartões</SelectItem>
                 <SelectItem value="none">Sem cartão</SelectItem>
-                {cards.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                ))}
+                {cards.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
               </SelectContent>
             </Select>
           </div>
           {activeFilters > 0 && (
-            <Button variant="ghost" size="sm" onClick={() => { setFilterType("all"); setFilterCategory("all"); setFilterCard("all"); setSearchText(""); }}>
-              Limpar filtros
-            </Button>
+            <Button variant="ghost" size="sm" onClick={() => { setFilterType("all"); setFilterCategory("all"); setFilterCard("all"); setSearchText(""); }}>Limpar filtros</Button>
           )}
         </div>
       )}
 
-      {/* Summary */}
       <div className="flex items-center justify-between text-sm">
         <span className="text-muted-foreground">{filtered.length} transações</span>
-        <span className={`font-semibold ${filteredTotal >= 0 ? "text-income" : "text-expense"}`}>
-          Saldo: {fmt(filteredTotal)}
-        </span>
+        <span className={`font-semibold ${filteredTotal >= 0 ? "text-income" : "text-expense"}`}>Saldo: {fmt(filteredTotal)}</span>
       </div>
 
-      {/* List */}
       <div className="space-y-2">
         {filtered.length === 0 && <p className="text-muted-foreground text-sm">Nenhuma transação encontrada</p>}
         {filtered.map((tx) => {
@@ -401,7 +359,7 @@ const Transactions = () => {
           const card = cards.find((c) => c.id === tx.card_id);
           return (
             <div key={tx.id} className="glass rounded-xl p-4 flex items-center justify-between glass-hover">
-              <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center gap-3 min-w-0 cursor-pointer" onClick={() => openEdit(tx)}>
                 <span className="text-lg shrink-0">{cat?.icon || "📦"}</span>
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground truncate">{tx.description}</p>
@@ -411,10 +369,13 @@ const Transactions = () => {
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-3 shrink-0">
+              <div className="flex items-center gap-2 shrink-0">
                 <span className={`text-sm font-semibold ${tx.type === "income" ? "text-income" : "text-expense"}`}>
                   {tx.type === "income" ? "+" : "-"}{fmt(Number(tx.amount))}
                 </span>
+                <button onClick={() => openEdit(tx)} className="text-muted-foreground hover:text-primary transition-colors">
+                  <Pencil className="w-4 h-4" />
+                </button>
                 <button onClick={() => handleDelete(tx.id)} className="text-muted-foreground hover:text-destructive transition-colors">
                   <Trash2 className="w-4 h-4" />
                 </button>

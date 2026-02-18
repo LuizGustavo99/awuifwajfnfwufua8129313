@@ -65,7 +65,11 @@ export const parseNubankCSV = (csvText: string): ParsedNubankRow[] => {
     const rawDate = cols[dateIdx].trim();
     const description = cols[descIdx].trim();
     const rawAmount = cols[amountIdx].trim().replace(",", ".");
-    const amount = Math.abs(parseFloat(rawAmount));
+    const parsedAmount = parseFloat(rawAmount);
+    const amount = Math.abs(parsedAmount);
+
+    // Skip negative values (payments, refunds)
+    if (parsedAmount < 0) continue;
 
     if (isNaN(amount) || !description) continue;
 

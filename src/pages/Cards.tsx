@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Trash2, CreditCard } from "lucide-react";
+import { Plus, Trash2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 interface Card {
@@ -25,6 +25,7 @@ const Cards = () => {
   const { user } = useAuth();
   const [cards, setCards] = useState<Card[]>([]);
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [lastDigits, setLastDigits] = useState("");
   const [brand, setBrand] = useState("");
@@ -41,10 +42,26 @@ const Cards = () => {
 
   useEffect(() => { fetchCards(); }, [user]);
 
-  const handleAdd = async () => {
+  const resetForm = () => {
+    setName(""); setLastDigits(""); setBrand(""); setLimit("");
+    setClosingDay("1"); setDueDay("10"); setColor("#3b82f6"); setEditingId(null);
+  };
+
+  const openEdit = (card: Card) => {
+    setEditingId(card.id);
+    setName(card.name);
+    setLastDigits(card.last_digits || "");
+    setBrand(card.brand || "");
+    setLimit(String(card.credit_limit || ""));
+    setClosingDay(String(card.closing_day));
+    setDueDay(String(card.due_day));
+    setColor(card.color);
+    setOpen(true);
+  };
+
+  const handleSave = async () => {
     if (!name.trim()) { toast.error("Nome obrigatório"); return; }
-    const { error } = await supabase.from("cards").insert({
-      user_id: user!.id,
+    const payload = {
       name: name.trim(),
       last_digits: lastDigits || null,
       brand: brand || null,
@@ -52,11 +69,18 @@ const Cards = () => {
       closing_day: parseInt(closingDay) || 1,
       due_day: parseInt(dueDay) || 10,
       color,
-    });
-    if (error) { toast.error("Erro ao salvar"); return; }
-    toast.success("Cartão adicionado!");
+    };
+    if (editingId) {
+      const { error } = await supabase.from("cards").update(payload).eq("id", editingId);
+      if (error) { toast.error("Erro ao atualizar"); return; }
+      toast.success("Cartão atualizado!");
+    } else {
+      const { error } = await supabase.from("cards").insert({ ...payload, user_id: user!.id });
+      if (error) { toast.error("Erro ao salvar"); return; }
+      toast.success("Cartão adicionado!");
+    }
     setOpen(false);
-    setName(""); setLastDigits(""); setBrand(""); setLimit("");
+    resetForm();
     fetchCards();
   };
 
@@ -72,12 +96,12 @@ const Cards = () => {
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-foreground">Cartões</h1>
-        <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) resetForm(); }}>
           <DialogTrigger asChild>
             <Button size="sm"><Plus className="w-4 h-4 mr-1" />Novo</Button>
           </DialogTrigger>
           <DialogContent className="bg-card border-border">
-            <DialogHeader><DialogTitle>Novo Cartão</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>{editingId ? "Editar Cartão" : "Novo Cartão"}</DialogTitle></DialogHeader>
             <div className="space-y-4 pt-2">
               <div className="space-y-2">
                 <Label>Nome</Label>
@@ -115,7 +139,7 @@ const Cards = () => {
                   ))}
                 </div>
               </div>
-              <Button onClick={handleAdd} className="w-full">Salvar</Button>
+              <Button onClick={handleSave} className="w-full">{editingId ? "Atualizar" : "Salvar"}</Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -131,9 +155,14 @@ const Cards = () => {
                 <p className="font-bold">{card.name}</p>
                 <p className="text-xs opacity-80">{card.brand || "Cartão"}</p>
               </div>
-              <button onClick={() => handleDelete(card.id)} className="opacity-60 hover:opacity-100 transition-opacity">
-                <Trash2 className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => openEdit(card)} className="opacity-60 hover:opacity-100 transition-opacity">
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button onClick={() => handleDelete(card.id)} className="opacity-60 hover:opacity-100 transition-opacity">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
             <p className="text-lg tracking-widest font-mono mb-4">•••• {card.last_digits || "0000"}</p>
             <div className="flex justify-between text-xs opacity-80">
