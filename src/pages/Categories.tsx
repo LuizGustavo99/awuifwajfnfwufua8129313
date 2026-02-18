@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 interface Category {
@@ -23,35 +23,51 @@ const Categories = () => {
   const { user } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [type, setType] = useState<"income" | "expense">("expense");
   const [icon, setIcon] = useState("📦");
   const [color, setColor] = useState("#10b981");
 
-  const fetch = async () => {
+  const fetchCategories = async () => {
     if (!user) return;
     const { data } = await supabase.from("categories").select("*").order("name");
     setCategories(data || []);
   };
 
-  useEffect(() => { fetch(); }, [user]);
+  useEffect(() => { fetchCategories(); }, [user]);
 
-  const handleAdd = async () => {
+  const resetForm = () => { setName(""); setType("expense"); setIcon("📦"); setColor("#10b981"); setEditingId(null); };
+
+  const openEdit = (cat: Category) => {
+    setEditingId(cat.id);
+    setName(cat.name);
+    setType(cat.type as "income" | "expense");
+    setIcon(cat.icon);
+    setColor(cat.color);
+    setOpen(true);
+  };
+
+  const handleSave = async () => {
     if (!name.trim()) { toast.error("Nome obrigatório"); return; }
-    const { error } = await supabase.from("categories").insert({
-      user_id: user!.id, name: name.trim(), type, icon, color,
-    });
-    if (error) { toast.error("Erro ao salvar"); return; }
-    toast.success("Categoria criada!");
+    if (editingId) {
+      const { error } = await supabase.from("categories").update({ name: name.trim(), type, icon, color }).eq("id", editingId);
+      if (error) { toast.error("Erro ao atualizar"); return; }
+      toast.success("Categoria atualizada!");
+    } else {
+      const { error } = await supabase.from("categories").insert({ user_id: user!.id, name: name.trim(), type, icon, color });
+      if (error) { toast.error("Erro ao salvar"); return; }
+      toast.success("Categoria criada!");
+    }
     setOpen(false);
-    setName("");
-    fetch();
+    resetForm();
+    fetchCategories();
   };
 
   const handleDelete = async (id: string) => {
     await supabase.from("categories").delete().eq("id", id);
     toast.success("Removida");
-    fetch();
+    fetchCategories();
   };
 
   const incomeCategories = categories.filter((c) => c.type === "income");
@@ -61,12 +77,12 @@ const Categories = () => {
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-foreground">Categorias</h1>
-        <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) resetForm(); }}>
           <DialogTrigger asChild>
             <Button size="sm"><Plus className="w-4 h-4 mr-1" />Nova</Button>
           </DialogTrigger>
           <DialogContent className="bg-card border-border">
-            <DialogHeader><DialogTitle>Nova Categoria</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>{editingId ? "Editar Categoria" : "Nova Categoria"}</DialogTitle></DialogHeader>
             <div className="space-y-4 pt-2">
               <div className="space-y-2">
                 <Label>Nome</Label>
@@ -94,7 +110,7 @@ const Categories = () => {
                 <Label>Cor</Label>
                 <Input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="h-10 w-20 p-1 bg-muted" />
               </div>
-              <Button onClick={handleAdd} className="w-full">Salvar</Button>
+              <Button onClick={handleSave} className="w-full">{editingId ? "Atualizar" : "Salvar"}</Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -106,13 +122,18 @@ const Categories = () => {
           {section.items.length === 0 && <p className="text-xs text-muted-foreground">Nenhuma categoria</p>}
           {section.items.map((cat) => (
             <div key={cat.id} className="glass rounded-xl p-4 flex items-center justify-between glass-hover">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 cursor-pointer" onClick={() => openEdit(cat)}>
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center text-lg" style={{ background: cat.color + "22" }}>{cat.icon}</div>
                 <span className="text-sm font-medium text-foreground">{cat.name}</span>
               </div>
-              <button onClick={() => handleDelete(cat.id)} className="text-muted-foreground hover:text-destructive transition-colors">
-                <Trash2 className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => openEdit(cat)} className="text-muted-foreground hover:text-primary transition-colors">
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button onClick={() => handleDelete(cat.id)} className="text-muted-foreground hover:text-destructive transition-colors">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           ))}
         </div>
