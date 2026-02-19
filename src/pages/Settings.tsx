@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -7,8 +7,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { Plus, Trash2, RefreshCw, Pencil, User, Lock } from "lucide-react";
+import { Plus, Trash2, RefreshCw, Pencil, User, Lock, UserPlus, Users } from "lucide-react";
 import { toast } from "sonner";
+import { useEffect } from "react";
 
 interface FixedEntry {
   id: string;
@@ -27,8 +28,14 @@ interface Category {
   icon: string;
 }
 
+interface ManagedUser {
+  id: string;
+  email: string;
+  display_name: string;
+}
+
 const SettingsPage = () => {
-  const { user, signOut } = useAuth();
+  const { user, signOut, isAdmin } = useAuth();
   const [entries, setEntries] = useState<FixedEntry[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [open, setOpen] = useState(false);
@@ -45,6 +52,15 @@ const SettingsPage = () => {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [updatingUser, setUpdatingUser] = useState(false);
 
+  // Admin: manage users
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
+  const [userDialogOpen, setUserDialogOpen] = useState(false);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserPassword, setNewUserPassword] = useState("");
+  const [newUserConfirmPassword, setNewUserConfirmPassword] = useState("");
+  const [savingUser, setSavingUser] = useState(false);
+
   const fetchData = async () => {
     if (!user) return;
     const [fRes, cRes] = await Promise.all([
@@ -55,10 +71,24 @@ const SettingsPage = () => {
     setCategories(cRes.data || []);
   };
 
+  const fetchUsers = async () => {
+    if (!isAdmin) return;
+    const { data, error } = await supabase.functions.invoke("manage-users", {
+      body: { action: "list" },
+    });
+    if (!error && data?.users) {
+      setManagedUsers(data.users);
+    }
+  };
+
   useEffect(() => {
     fetchData();
     if (user) setNewDisplayName(user.user_metadata?.display_name || "");
   }, [user]);
+
+  useEffect(() => {
+    if (isAdmin) fetchUsers();
+  }, [isAdmin]);
 
   const resetForm = () => {
     setDesc(""); setAmount(""); setType("expense"); setDayOfMonth("1"); setCategoryId(""); setEditingId(null);
@@ -133,6 +163,80 @@ const SettingsPage = () => {
     }
   };
 
+  // Admin: create or update user via edge function
+  const handleSaveUser = async () => {
+    if (!newUserName.trim()) { toast.error("Preencha o nome do usuário"); return; }
+    
+    if (editingUserId) {
+      // Update existing user
+      if (newUserPassword && newUserPassword !== newUserConfirmPassword) {
+        toast.error("As senhas não coincidem"); return;
+      }
+      if (newUserPassword && newUserPassword.length < 6) {
+        toast.error("A senha deve ter no mínimo 6 caracteres"); return;
+      }
+      setSavingUser(true);
+      const { data, error } = await supabase.functions.invoke("manage-users", {
+        body: {
+          action: "update",
+          user_id: editingUserId,
+          display_name: newUserName.trim(),
+          password: newUserPassword || undefined,
+        },
+      });
+      setSavingUser(false);
+      if (error || data?.error) { toast.error(data?.error || "Erro ao atualizar usuário"); return; }
+      toast.success("Usuário atualizado!");
+    } else {
+      // Create new user
+      if (!newUserPassword || newUserPassword.length < 6) {
+        toast.error("A senha deve ter no mínimo 6 caracteres"); return;
+      }
+      if (newUserPassword !== newUserConfirmPassword) {
+        toast.error("As senhas não coincidem"); return;
+      }
+      setSavingUser(true);
+      const { data, error } = await supabase.functions.invoke("manage-users", {
+        body: {
+          action: "create",
+          display_name: newUserName.trim(),
+          password: newUserPassword,
+        },
+      });
+      setSavingUser(false);
+      if (error || data?.error) { toast.error(data?.error || "Erro ao criar usuário"); return; }
+      toast.success("Usuário criado!");
+    }
+    setUserDialogOpen(false);
+    resetUserForm();
+    fetchUsers();
+  };
+
+  const handleDeleteUser = async (userId: string) => {
+    if (userId === user?.id) { toast.error("Você não pode excluir seu próprio usuário"); return; }
+    const { data, error } = await supabase.functions.invoke("manage-users", {
+      body: { action: "delete", user_id: userId },
+    });
+    if (error || data?.error) { toast.error(data?.error || "Erro ao excluir"); return; }
+    toast.success("Usuário removido");
+    fetchUsers();
+  };
+
+  const openEditUser = (u: ManagedUser) => {
+    setEditingUserId(u.id);
+    setNewUserName(u.display_name);
+    setNewUserPassword("");
+    setNewUserConfirmPassword("");
+    setUserDialogOpen(true);
+  };
+
+  const resetUserForm = () => {
+    setEditingUserId(null);
+    setNewUserName("");
+    setNewUserPassword("");
+    setNewUserConfirmPassword("");
+  };
+
   const fmt = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   const filteredCats = categories.filter((c) => c.type === type);
 
@@ -166,6 +270,65 @@ const SettingsPage = () => {
           </Button>
         </div>
       </div>
+
+      {/* Admin: User management */}
+      {isAdmin && (
+        <div className="glass rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Users className="w-4 h-4" /> Gerenciar Usuários</h2>
+            <Dialog open={userDialogOpen} onOpenChange={(v) => { setUserDialogOpen(v); if (!v) resetUserForm(); }}>
+              <DialogTrigger asChild>
+                <Button size="sm" variant="outline"><UserPlus className="w-4 h-4 mr-1" />Novo</Button>
+              </DialogTrigger>
+              <DialogContent className="bg-card border-border">
+                <DialogHeader><DialogTitle>{editingUserId ? "Editar Usuário" : "Novo Usuário"}</DialogTitle></DialogHeader>
+                <div className="space-y-4 pt-2">
+                  <div className="space-y-2">
+                    <Label>Nome de usuário</Label>
+                    <Input value={newUserName} onChange={(e) => setNewUserName(e.target.value)} placeholder="Ex: João" className="bg-muted" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{editingUserId ? "Nova senha (deixe em branco para manter)" : "Senha"}</Label>
+                    <Input type="password" value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} placeholder="Min. 6 caracteres" className="bg-muted" />
+                  </div>
+                  {(newUserPassword || !editingUserId) && (
+                    <div className="space-y-2">
+                      <Label>Confirmar senha</Label>
+                      <Input type="password" value={newUserConfirmPassword} onChange={(e) => setNewUserConfirmPassword(e.target.value)} placeholder="••••••••" className="bg-muted" />
+                    </div>
+                  )}
+                  <Button onClick={handleSaveUser} className="w-full" disabled={savingUser}>
+                    {savingUser ? "Salvando..." : editingUserId ? "Atualizar" : "Criar Usuário"}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
+          <div className="space-y-2">
+            {managedUsers.map((u) => (
+              <div key={u.id} className="glass rounded-xl p-4 flex items-center justify-between glass-hover">
+                <div className="flex items-center gap-3">
+                  <User className="w-4 h-4 text-primary" />
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{u.display_name}</p>
+                    <p className="text-xs text-muted-foreground">{u.id === user?.id ? "Você (admin)" : "Usuário"}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => openEditUser(u)} className="text-muted-foreground hover:text-primary transition-colors">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  {u.id !== user?.id && (
+                    <button onClick={() => handleDeleteUser(u.id)} className="text-muted-foreground hover:text-destructive transition-colors">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Fixed summary */}
       <div className="grid grid-cols-2 gap-4">
