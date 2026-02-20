@@ -17,9 +17,14 @@ interface Card {
   closing_day: number;
   due_day: number;
   color: string;
+  usedAmount?: number;
 }
 
-const COLORS = ["#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#06b6d4", "#ef4444", "#6366f1"];
+const COLORS = [
+  "#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b",
+  "#10b981", "#06b6d4", "#ef4444", "#6366f1",
+  "#6b7280", "#f8fafc",
+];
 
 const Cards = () => {
   const { user } = useAuth();
@@ -36,8 +41,30 @@ const Cards = () => {
 
   const fetchCards = async () => {
     if (!user) return;
-    const { data } = await supabase.from("cards").select("*").order("name");
-    setCards(data || []);
+    const { data: cardsData } = await supabase.from("cards").select("*").order("name");
+    if (!cardsData) { setCards([]); return; }
+
+    // Get current month's expenses per card
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
+
+    const { data: txData } = await supabase
+      .from("transactions")
+      .select("card_id, amount")
+      .eq("type", "expense")
+      .not("card_id", "is", null)
+      .gte("date", startOfMonth)
+      .lte("date", endOfMonth);
+
+    const usedByCard: Record<string, number> = {};
+    (txData || []).forEach((tx) => {
+      if (tx.card_id) {
+        usedByCard[tx.card_id] = (usedByCard[tx.card_id] || 0) + Number(tx.amount);
+      }
+    });
+
+    setCards(cardsData.map((c) => ({ ...c, usedAmount: usedByCard[c.id] || 0 })));
   };
 
   useEffect(() => { fetchCards(); }, [user]);
@@ -92,6 +119,15 @@ const Cards = () => {
 
   const fmt = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
+  // Determine if a color is light (for text contrast)
+  const isLight = (hex: string) => {
+    const c = hex.replace("#", "");
+    const r = parseInt(c.substring(0, 2), 16);
+    const g = parseInt(c.substring(2, 4), 16);
+    const b = parseInt(c.substring(4, 6), 16);
+    return (r * 299 + g * 587 + b * 114) / 1000 > 160;
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
@@ -133,9 +169,14 @@ const Cards = () => {
               </div>
               <div className="space-y-2">
                 <Label>Cor</Label>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   {COLORS.map((c) => (
-                    <button key={c} onClick={() => setColor(c)} className={`w-8 h-8 rounded-full transition-transform ${color === c ? "scale-110 ring-2 ring-foreground" : ""}`} style={{ background: c }} />
+                    <button
+                      key={c}
+                      onClick={() => setColor(c)}
+                      className={`w-8 h-8 rounded-full transition-transform border ${color === c ? "scale-110 ring-2 ring-foreground" : "border-border"}`}
+                      style={{ background: c }}
+                    />
                   ))}
                 </div>
               </div>
@@ -148,29 +189,61 @@ const Cards = () => {
       {cards.length === 0 && <p className="text-muted-foreground text-sm">Nenhum cartão cadastrado</p>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {cards.map((card) => (
-          <div key={card.id} className="rounded-xl p-5 text-foreground relative overflow-hidden" style={{ background: `linear-gradient(135deg, ${card.color}, ${card.color}88)` }}>
-            <div className="flex justify-between items-start mb-6">
-              <div>
-                <p className="font-bold">{card.name}</p>
-                <p className="text-xs opacity-80">{card.brand || "Cartão"}</p>
+        {cards.map((card) => {
+          const used = card.usedAmount || 0;
+          const limitVal = Number(card.credit_limit) || 0;
+          const available = Math.max(0, limitVal - used);
+          const usedPct = limitVal > 0 ? Math.min(100, (used / limitVal) * 100) : 0;
+          const textColor = isLight(card.color) ? "#1e293b" : "#f8fafc";
+          const barBg = isLight(card.color) ? "rgba(0,0,0,0.15)" : "rgba(255,255,255,0.2)";
+          const barFill = usedPct > 80 ? "#ef4444" : usedPct > 50 ? "#f59e0b" : isLight(card.color) ? "#1e293b" : "#ffffff";
+
+          return (
+            <div
+              key={card.id}
+              className="rounded-xl p-5 relative overflow-hidden border border-white/10"
+              style={{ background: `linear-gradient(135deg, ${card.color}, ${card.color}cc)`, color: textColor }}
+            >
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <p className="font-bold text-base">{card.name}</p>
+                  <p className="text-xs opacity-70">{card.brand || "Cartão"}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => openEdit(card)} style={{ color: textColor }} className="opacity-60 hover:opacity-100 transition-opacity">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => handleDelete(card.id)} style={{ color: textColor }} className="opacity-60 hover:opacity-100 transition-opacity">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => openEdit(card)} className="opacity-60 hover:opacity-100 transition-opacity">
-                  <Pencil className="w-4 h-4" />
-                </button>
-                <button onClick={() => handleDelete(card.id)} className="opacity-60 hover:opacity-100 transition-opacity">
-                  <Trash2 className="w-4 h-4" />
-                </button>
+
+              <p className="text-lg tracking-widest font-mono mb-4">•••• {card.last_digits || "0000"}</p>
+
+              {/* Limit bar */}
+              {limitVal > 0 && (
+                <div className="mb-3">
+                  <div className="flex justify-between text-xs mb-1 opacity-80">
+                    <span>Usado: {fmt(used)}</span>
+                    <span>Disponível: {fmt(available)}</span>
+                  </div>
+                  <div className="h-1.5 rounded-full" style={{ background: barBg }}>
+                    <div
+                      className="h-1.5 rounded-full transition-all"
+                      style={{ width: `${usedPct}%`, background: barFill }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-between text-xs opacity-70">
+                <span>Limite: {fmt(limitVal)}</span>
+                <span>Fecha: {card.closing_day} | Vence: {card.due_day}</span>
               </div>
             </div>
-            <p className="text-lg tracking-widest font-mono mb-4">•••• {card.last_digits || "0000"}</p>
-            <div className="flex justify-between text-xs opacity-80">
-              <span>Limite: {fmt(Number(card.credit_limit))}</span>
-              <span>Fecha: {card.closing_day} | Vence: {card.due_day}</span>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

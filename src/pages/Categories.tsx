@@ -17,7 +17,34 @@ interface Category {
   color: string;
 }
 
-const ICONS = ["📦", "🍔", "🏠", "🚗", "💊", "🎓", "🎮", "👗", "💼", "💰", "📱", "✈️", "🎬", "🐕", "💇"];
+const ICONS = [
+  // Alimentação
+  "🍔", "🍕", "🍜", "🛒", "☕", "🍷",
+  // Casa & Moradia
+  "🏠", "🪑", "🧹", "💡", "🔧", "🚿", "🏗️",
+  // Contas & Utilidades
+  "💧", "⚡", "📡", "🌐", "📞", "🔌",
+  // Assinaturas & Streaming
+  "📺", "🎵", "🎙️", "📰", "🎮", "🕹️",
+  // Transporte
+  "🚗", "🚌", "✈️", "⛽", "🅿️",
+  // Saúde
+  "💊", "🏥", "🦷", "🧬", "💪",
+  // Educação
+  "🎓", "📚", "✏️", "🖥️",
+  // Lazer
+  "🎬", "🏖️", "🎭", "🎯", "⚽",
+  // Vestuário
+  "👗", "👟", "👔",
+  // Pets
+  "🐕", "🐈",
+  // Beleza
+  "💇", "💄", "🪥",
+  // Finanças
+  "💰", "💳", "📈", "🏦", "💼",
+  // Outros
+  "📦", "🎁", "⭐", "📱",
+];
 
 const Categories = () => {
   const { user } = useAuth();
@@ -100,7 +127,7 @@ const Categories = () => {
               </div>
               <div className="space-y-2">
                 <Label>Ícone</Label>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-1">
                   {ICONS.map((ic) => (
                     <button key={ic} onClick={() => setIcon(ic)} className={`text-xl p-2 rounded-lg transition-colors ${icon === ic ? "bg-primary/20 ring-1 ring-primary" : "hover:bg-muted"}`}>{ic}</button>
                   ))}

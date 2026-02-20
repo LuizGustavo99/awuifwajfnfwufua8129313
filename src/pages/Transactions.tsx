@@ -5,11 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Trash2, Search, Filter, Download, Upload, Pencil } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Plus, Trash2, Search, Filter, Download, Upload, Pencil, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { exportTransactionsCSV, parseNubankCSV } from "@/lib/csv-utils";
+import { useNavigate } from "react-router-dom";
 
 interface Transaction {
   id: string;
@@ -40,6 +41,7 @@ interface Card {
 
 const Transactions = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
@@ -48,6 +50,16 @@ const Transactions = () => {
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Checkup state
+  const [checkupOpen, setCheckupOpen] = useState(false);
+  const [checkupMessage, setCheckupMessage] = useState("");
+  const [checkupTarget, setCheckupTarget] = useState<"categories" | "cards" | null>(null);
+
+  // Import card selection
+  const [importCardId, setImportCardId] = useState("");
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   // Filters
   const [filterMonth, setFilterMonth] = useState(() => {
@@ -83,6 +95,19 @@ const Transactions = () => {
     setTransactions(txRes.data || []);
     setCategories(catRes.data || []);
     setCards(cardRes.data || []);
+
+    // Checkup: only run once on first load (no editingId)
+    const cats = catRes.data || [];
+    const cds = cardRes.data || [];
+    if (cats.length === 0) {
+      setCheckupMessage("Você ainda não tem categorias cadastradas. Recomendamos criar categorias antes de adicionar transações para uma melhor organização.");
+      setCheckupTarget("categories");
+      setCheckupOpen(true);
+    } else if (cds.length === 0) {
+      setCheckupMessage("Você ainda não tem cartões cadastrados. Deseja cadastrar um cartão antes de registrar transações?");
+      setCheckupTarget("cards");
+      setCheckupOpen(true);
+    }
   };
 
   useEffect(() => { fetchData(); }, [user, filterMonth]);
@@ -191,16 +216,25 @@ const Transactions = () => {
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user) return;
+    setPendingFile(file);
+    setImportCardId("");
+    setImportDialogOpen(true);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const executeImport = async () => {
+    if (!pendingFile || !user) return;
     setImporting(true);
+    setImportDialogOpen(false);
     try {
-      const text = await file.text();
+      const text = await pendingFile.text();
       const parsed = parseNubankCSV(text);
       if (parsed.length === 0) { toast.error("Nenhuma transação encontrada no arquivo"); return; }
-      const nubankCard = cards.find((c) => c.name.toLowerCase().includes("nubank"));
+      const selectedCardId = importCardId && importCardId !== "none" ? importCardId : null;
       const rows = parsed.map((row) => ({
         user_id: user.id, description: row.description, amount: row.amount,
         type: "expense" as const, date: row.date,
-        category_id: null, card_id: nubankCard?.id || null,
+        category_id: null, card_id: selectedCardId,
       }));
       let inserted = 0;
       for (let i = 0; i < rows.length; i += 50) {
@@ -211,11 +245,12 @@ const Transactions = () => {
       }
       toast.success(`${inserted} transações importadas!`);
       fetchData();
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao processar arquivo");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Erro ao processar arquivo";
+      toast.error(message);
     } finally {
       setImporting(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      setPendingFile(null);
     }
   };
 
@@ -225,6 +260,50 @@ const Transactions = () => {
 
   return (
     <div className="space-y-4 animate-fade-in">
+      {/* Checkup Dialog */}
+      <Dialog open={checkupOpen} onOpenChange={setCheckupOpen}>
+        <DialogContent className="bg-card border-border">
+          <DialogHeader>
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-yellow-500" />
+              <DialogTitle>Configuração recomendada</DialogTitle>
+            </div>
+            <DialogDescription className="text-muted-foreground pt-1">{checkupMessage}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-2 flex-col sm:flex-row">
+            <Button variant="outline" onClick={() => setCheckupOpen(false)} className="flex-1">Continuar assim</Button>
+            <Button onClick={() => { setCheckupOpen(false); navigate(checkupTarget === "categories" ? "/categories" : "/cards"); }} className="flex-1">
+              {checkupTarget === "categories" ? "Ir para Categorias" : "Ir para Cartões"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import card selection dialog */}
+      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+        <DialogContent className="bg-card border-border">
+          <DialogHeader>
+            <DialogTitle>Importar fatura CSV</DialogTitle>
+            <DialogDescription>Selecione o cartão ao qual estas transações pertencem (opcional).</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <Label>Cartão de crédito</Label>
+            <Select value={importCardId} onValueChange={setImportCardId}>
+              <SelectTrigger className="bg-muted"><SelectValue placeholder="Sem cartão (nenhum)" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Sem cartão</SelectItem>
+                {cards.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
+              </SelectContent>
+            </Select>
+            {pendingFile && <p className="text-xs text-muted-foreground">Arquivo: {pendingFile.name}</p>}
+          </div>
+          <DialogFooter className="flex gap-2">
+            <Button variant="outline" onClick={() => { setImportDialogOpen(false); setPendingFile(null); }}>Cancelar</Button>
+            <Button onClick={executeImport}>Importar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-foreground">Transações</h1>
         <div className="flex items-center gap-2">
