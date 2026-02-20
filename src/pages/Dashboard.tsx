@@ -11,6 +11,7 @@ interface Transaction {
   type: string;
   date: string;
   category_id: string | null;
+  card_id: string | null;
 }
 
 interface Category {
@@ -20,11 +21,19 @@ interface Category {
   icon: string;
 }
 
+interface Card {
+  id: string;
+  name: string;
+  credit_limit: number;
+  color: string;
+}
+
 const Dashboard = () => {
   const { user } = useAuth();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [cards, setCards] = useState<Card[]>([]);
   const [savingsTotal, setSavingsTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
@@ -34,19 +43,19 @@ const Dashboard = () => {
       const now = new Date();
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
       const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
-
-      // Last 6 months for evolution chart
       const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1).toISOString().split("T")[0];
 
-      const [txRes, allTxRes, catRes, savRes] = await Promise.all([
+      const [txRes, allTxRes, catRes, savRes, cardRes] = await Promise.all([
         supabase.from("transactions").select("*").gte("date", startOfMonth).lte("date", endOfMonth).order("date", { ascending: false }),
         supabase.from("transactions").select("*").gte("date", sixMonthsAgo).order("date", { ascending: false }),
         supabase.from("categories").select("*"),
         supabase.from("savings").select("amount, type"),
+        supabase.from("cards").select("id, name, credit_limit, color"),
       ]);
       setTransactions(txRes.data || []);
       setAllTransactions(allTxRes.data || []);
       setCategories(catRes.data || []);
+      setCards(cardRes.data || []);
 
       const savData = savRes.data || [];
       const total = savData.reduce((sum, s) => sum + (s.type === "deposit" ? Number(s.amount) : -Number(s.amount)), 0);
@@ -67,6 +76,18 @@ const Dashboard = () => {
       color: cat.color,
     }))
     .filter((c) => c.value > 0);
+
+  // Card limit usage (current month)
+  const cardLimitData = cards
+    .filter((c) => Number(c.credit_limit) > 0)
+    .map((card) => {
+      const used = transactions
+        .filter((t) => t.type === "expense" && t.card_id === card.id)
+        .reduce((s, t) => s + Number(t.amount), 0);
+      const limit = Number(card.credit_limit);
+      const available = Math.max(0, limit - used);
+      return { name: card.name, usado: used, disponível: available, color: card.color };
+    });
 
   // Monthly evolution (last 6 months)
   const now = new Date();
@@ -98,7 +119,6 @@ const Dashboard = () => {
   });
 
   const fmt = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-
   const tooltipStyle = { background: "hsl(220 18% 12%)", border: "1px solid hsl(220 14% 18%)", borderRadius: "8px", color: "hsl(210 20% 92%)" };
 
   const summaryCards = [
@@ -186,6 +206,30 @@ const Dashboard = () => {
           )}
         </div>
       </div>
+
+      {/* Card limit usage chart */}
+      {cardLimitData.length > 0 && (
+        <div className="glass rounded-xl p-5">
+          <h3 className="text-sm font-medium text-foreground mb-4">Limite dos cartões (este mês)</h3>
+          <ResponsiveContainer width="100%" height={cardLimitData.length * 60 + 20}>
+            <BarChart data={cardLimitData} layout="vertical" margin={{ left: 8, right: 16 }}>
+              <XAxis type="number" hide />
+              <YAxis type="category" dataKey="name" tick={{ fill: "hsl(215 12% 50%)", fontSize: 12 }} axisLine={false} tickLine={false} width={80} />
+              <Tooltip contentStyle={tooltipStyle} formatter={(value: number) => fmt(value)} />
+              <Bar dataKey="usado" name="Usado" stackId="a" radius={[0, 0, 0, 0]} fill="hsl(0 72% 51%)" />
+              <Bar dataKey="disponível" name="Disponível" stackId="a" radius={[4, 4, 4, 4]} fill="hsl(160 84% 39%)" />
+            </BarChart>
+          </ResponsiveContainer>
+          <div className="flex gap-4 mt-2">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <div className="w-3 h-3 rounded-sm bg-expense" />Usado
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <div className="w-3 h-3 rounded-sm bg-income" />Disponível
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Charts row 2 */}
       <div className="glass rounded-xl p-5">
