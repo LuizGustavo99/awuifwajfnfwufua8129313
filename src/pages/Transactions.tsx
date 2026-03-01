@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Plus, Trash2, Search, Filter, Download, Upload, Pencil, AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, FileText } from "lucide-react";
+import { Plus, Trash2, Search, Filter, Download, Upload, Pencil, AlertTriangle, CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { exportTransactionsCSV, parseNubankCSV } from "@/lib/csv-utils";
@@ -232,52 +232,14 @@ const Transactions = () => {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const readPDFAsText = async (file: File): Promise<string> => {
-    // Read the PDF as base64, send to edge function for AI parsing
-    const arrayBuffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    // Extract raw text from PDF - simple text extraction
-    const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-    // Filter readable text
-    const readable = text.replace(/[^\x20-\x7E\xC0-\xFF\n\r\t]/g, " ").replace(/\s+/g, " ");
-    return readable;
-  };
 
   const executeImport = async () => {
     if (!pendingFile || !user) return;
     setImporting(true);
     setImportDialogOpen(false);
     try {
-      const isPDF = pendingFile.name.toLowerCase().endsWith(".pdf");
-      let parsedRows: Array<{ date: string; description: string; amount: number }>;
-
-      if (isPDF) {
-        toast.info("Processando PDF com IA... Isso pode levar alguns segundos.");
-        const rawText = await readPDFAsText(pendingFile);
-        
-        if (rawText.trim().length < 50) {
-          toast.error("Não foi possível extrair texto do PDF. Tente um arquivo CSV.");
-          return;
-        }
-
-        const { data, error } = await supabase.functions.invoke("parse-statement", {
-          body: { text: rawText },
-        });
-
-        if (error || !data?.transactions) {
-          toast.error("Erro ao processar PDF. Verifique se o arquivo é um extrato bancário.");
-          return;
-        }
-
-        parsedRows = data.transactions;
-      } else {
-        const text = await pendingFile.text();
-        parsedRows = parseNubankCSV(text);
-      }
+      const text = await pendingFile.text();
+      const parsedRows = parseNubankCSV(text);
 
       if (parsedRows.length === 0) {
         toast.error("Nenhuma transação encontrada no arquivo");
@@ -339,14 +301,10 @@ const Transactions = () => {
         <DialogContent className="bg-card border-border">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <FileText className="w-5 h-5 text-primary" />
-              Importar fatura
+              <Upload className="w-5 h-5 text-primary" />
+              Importar CSV
             </DialogTitle>
-            <DialogDescription>
-              {pendingFile?.name.toLowerCase().endsWith(".pdf")
-                ? "O PDF será analisado por IA para extrair as transações."
-                : "Selecione o cartão ao qual estas transações pertencem (opcional)."}
-            </DialogDescription>
+            <DialogDescription>Selecione o cartão ao qual estas transações pertencem (opcional).</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <Label>Cartão de crédito</Label>
@@ -359,11 +317,9 @@ const Transactions = () => {
             </Select>
             {pendingFile && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-lg p-2">
-                <FileText className="w-4 h-4 shrink-0" />
+                <Upload className="w-4 h-4 shrink-0" />
                 <span className="truncate">{pendingFile.name}</span>
-                <span className="shrink-0 text-primary font-medium">
-                  {pendingFile.name.toLowerCase().endsWith(".pdf") ? "PDF" : "CSV"}
-                </span>
+                <span className="shrink-0 text-primary font-medium">CSV</span>
               </div>
             )}
           </div>
@@ -377,7 +333,7 @@ const Transactions = () => {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-foreground">Transações</h1>
         <div className="flex items-center gap-2">
-          <input ref={fileInputRef} type="file" accept=".csv,.pdf" className="hidden" onChange={handleImportFile} />
+          <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleImportFile} />
           <Button variant="outline" size="sm" onClick={handleImportClick} disabled={importing}>
             <Upload className="w-4 h-4 mr-1" />{importing ? "..." : "Importar"}
           </Button>
