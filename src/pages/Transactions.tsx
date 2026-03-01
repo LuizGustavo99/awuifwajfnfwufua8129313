@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Plus, Trash2, Search, Filter, Download, Upload, Pencil, AlertTriangle } from "lucide-react";
+import { Plus, Trash2, Search, Filter, Download, Upload, Pencil, AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { exportTransactionsCSV, parseNubankCSV } from "@/lib/csv-utils";
@@ -38,6 +38,8 @@ interface Card {
   id: string;
   name: string;
 }
+
+const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
 const Transactions = () => {
   const { user } = useAuth();
@@ -81,6 +83,15 @@ const Transactions = () => {
   const [isInstallment, setIsInstallment] = useState(false);
   const [totalInstallments, setTotalInstallments] = useState("2");
 
+  // Month navigation helpers
+  const [filterYear, filterMonthNum] = filterMonth.split("-").map(Number);
+  const currentMonthLabel = `${monthNames[filterMonthNum - 1]} ${filterYear}`;
+
+  const navigateMonth = (delta: number) => {
+    const d = new Date(filterYear, filterMonthNum - 1 + delta, 1);
+    setFilterMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+
   const fetchData = async () => {
     if (!user) return;
     const [y, m] = filterMonth.split("-").map(Number);
@@ -96,7 +107,6 @@ const Transactions = () => {
     setCategories(catRes.data || []);
     setCards(cardRes.data || []);
 
-    // Checkup: only run once on first load (no editingId)
     const cats = catRes.data || [];
     const cds = cardRes.data || [];
     if (cats.length === 0) {
@@ -222,20 +232,65 @@ const Transactions = () => {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const readPDFAsText = async (file: File): Promise<string> => {
+    // Read the PDF as base64, send to edge function for AI parsing
+    const arrayBuffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    // Extract raw text from PDF - simple text extraction
+    const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    // Filter readable text
+    const readable = text.replace(/[^\x20-\x7E\xC0-\xFF\n\r\t]/g, " ").replace(/\s+/g, " ");
+    return readable;
+  };
+
   const executeImport = async () => {
     if (!pendingFile || !user) return;
     setImporting(true);
     setImportDialogOpen(false);
     try {
-      const text = await pendingFile.text();
-      const parsed = parseNubankCSV(text);
-      if (parsed.length === 0) { toast.error("Nenhuma transação encontrada no arquivo"); return; }
+      const isPDF = pendingFile.name.toLowerCase().endsWith(".pdf");
+      let parsedRows: Array<{ date: string; description: string; amount: number }>;
+
+      if (isPDF) {
+        toast.info("Processando PDF com IA... Isso pode levar alguns segundos.");
+        const rawText = await readPDFAsText(pendingFile);
+        
+        if (rawText.trim().length < 50) {
+          toast.error("Não foi possível extrair texto do PDF. Tente um arquivo CSV.");
+          return;
+        }
+
+        const { data, error } = await supabase.functions.invoke("parse-statement", {
+          body: { text: rawText },
+        });
+
+        if (error || !data?.transactions) {
+          toast.error("Erro ao processar PDF. Verifique se o arquivo é um extrato bancário.");
+          return;
+        }
+
+        parsedRows = data.transactions;
+      } else {
+        const text = await pendingFile.text();
+        parsedRows = parseNubankCSV(text);
+      }
+
+      if (parsedRows.length === 0) {
+        toast.error("Nenhuma transação encontrada no arquivo");
+        return;
+      }
+
       const selectedCardId = importCardId && importCardId !== "none" ? importCardId : null;
-      const rows = parsed.map((row) => ({
+      const rows = parsedRows.map((row) => ({
         user_id: user.id, description: row.description, amount: row.amount,
         type: "expense" as const, date: row.date,
         category_id: null, card_id: selectedCardId,
       }));
+
       let inserted = 0;
       for (let i = 0; i < rows.length; i += 50) {
         const batch = rows.slice(i, i + 50);
@@ -265,7 +320,7 @@ const Transactions = () => {
         <DialogContent className="bg-card border-border">
           <DialogHeader>
             <div className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-yellow-500" />
+              <AlertTriangle className="w-5 h-5 text-warning" />
               <DialogTitle>Configuração recomendada</DialogTitle>
             </div>
             <DialogDescription className="text-muted-foreground pt-1">{checkupMessage}</DialogDescription>
@@ -283,8 +338,15 @@ const Transactions = () => {
       <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
         <DialogContent className="bg-card border-border">
           <DialogHeader>
-            <DialogTitle>Importar fatura CSV</DialogTitle>
-            <DialogDescription>Selecione o cartão ao qual estas transações pertencem (opcional).</DialogDescription>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5 text-primary" />
+              Importar fatura
+            </DialogTitle>
+            <DialogDescription>
+              {pendingFile?.name.toLowerCase().endsWith(".pdf")
+                ? "O PDF será analisado por IA para extrair as transações."
+                : "Selecione o cartão ao qual estas transações pertencem (opcional)."}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <Label>Cartão de crédito</Label>
@@ -295,7 +357,15 @@ const Transactions = () => {
                 {cards.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
               </SelectContent>
             </Select>
-            {pendingFile && <p className="text-xs text-muted-foreground">Arquivo: {pendingFile.name}</p>}
+            {pendingFile && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-lg p-2">
+                <FileText className="w-4 h-4 shrink-0" />
+                <span className="truncate">{pendingFile.name}</span>
+                <span className="shrink-0 text-primary font-medium">
+                  {pendingFile.name.toLowerCase().endsWith(".pdf") ? "PDF" : "CSV"}
+                </span>
+              </div>
+            )}
           </div>
           <DialogFooter className="flex gap-2">
             <Button variant="outline" onClick={() => { setImportDialogOpen(false); setPendingFile(null); }}>Cancelar</Button>
@@ -307,7 +377,7 @@ const Transactions = () => {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-foreground">Transações</h1>
         <div className="flex items-center gap-2">
-          <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleImportFile} />
+          <input ref={fileInputRef} type="file" accept=".csv,.pdf" className="hidden" onChange={handleImportFile} />
           <Button variant="outline" size="sm" onClick={handleImportClick} disabled={importing}>
             <Upload className="w-4 h-4 mr-1" />{importing ? "..." : "Importar"}
           </Button>
@@ -381,9 +451,28 @@ const Transactions = () => {
         </div>
       </div>
 
-      {/* Filters bar */}
+      {/* Month Selector — styled */}
       <div className="flex flex-wrap items-center gap-2">
-        <Input type="month" value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="bg-muted w-auto" />
+        <div className="glass rounded-xl flex items-center gap-1 px-1 py-1">
+          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => navigateMonth(-1)}>
+            <ChevronLeft className="w-4 h-4" />
+          </Button>
+          <button
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-foreground hover:bg-muted/60 transition-colors"
+            onClick={() => {
+              const now = new Date();
+              setFilterMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
+            }}
+            title="Ir para mês atual"
+          >
+            <CalendarDays className="w-4 h-4 text-primary" />
+            <span>{currentMonthLabel}</span>
+          </button>
+          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => navigateMonth(1)}>
+            <ChevronRight className="w-4 h-4" />
+          </Button>
+        </div>
+
         <Button variant="outline" size="sm" onClick={() => setShowFilters(!showFilters)} className={activeFilters > 0 ? "border-primary text-primary" : ""}>
           <Filter className="w-4 h-4 mr-1" />Filtros{activeFilters > 0 ? ` (${activeFilters})` : ""}
         </Button>

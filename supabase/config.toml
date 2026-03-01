@@ -2,3 +2,6 @@ project_id = "tetzswnslmjaamzygjbd"
 
 [functions.manage-users]
 verify_jwt = false
+
+[functions.parse-statement]
+verify_jwt = false
