@@ -1,0 +1,96 @@
+version: "3.8"
+
+services:
+  # ── PostgreSQL ──
+  db:
+    image: postgres:15-alpine
+    container_name: fincontrol-db
+    restart: always
+    environment:
+      POSTGRES_USER: fincontrol
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-FinControl2026!}
+      POSTGRES_DB: fincontrol
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fincontrol"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Supabase – GoTrue (Auth) ──
+  auth:
+    image: supabase/gotrue:v2.151.0
+    container_name: fincontrol-auth
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: "0.0.0.0"
+      GOTRUE_API_PORT: "9999"
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL:-http://localhost:8000}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://fincontrol:${DB_PASSWORD:-FinControl2026!}@db:5432/fincontrol?sslmode=disable
+      GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:8080}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-com-pelo-menos-32-caracteres-aqui}
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+    ports:
+      - "9999:9999"
+
+  # ── Supabase – PostgREST (API REST) ──
+  rest:
+    image: postgrest/postgrest:v12.0.2
+    container_name: fincontrol-rest
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://fincontrol:${DB_PASSWORD:-FinControl2026!}@db:5432/fincontrol
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-com-pelo-menos-32-caracteres-aqui}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    ports:
+      - "3000:3000"
+
+  # ── Kong (API Gateway) ──
+  kong:
+    image: kong:3.5
+    container_name: fincontrol-gateway
+    restart: always
+    depends_on:
+      - auth
+      - rest
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      KONG_PROXY_LISTEN: "0.0.0.0:8000"
+      KONG_LOG_LEVEL: info
+    volumes:
+      - ./kong.yml:/etc/kong/kong.yml
+    ports:
+      - "8000:8000"
+
+  # ── Aplicação Web (Nginx) ──
+  app:
+    image: nginx:alpine
+    container_name: fincontrol-app
+    restart: always
+    depends_on:
+      - kong
+    volumes:
+      - ./dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:
