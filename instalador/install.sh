@@ -259,7 +259,25 @@ SQLEOF
   info "init-db.sql gerado."
 }
 
-# ─── 7. Subir containers ─────────────────────────────────────
+# ─── 7. Configurar backup automático ─────────────────────────
+setup_backup() {
+  BACKUP_SCRIPT="$INSTALL_DIR/instalador/backup.sh"
+  chmod +x "$BACKUP_SCRIPT"
+
+  # Verificar se o cron já existe
+  if crontab -l 2>/dev/null | grep -q "fincontrol.*backup.sh"; then
+    info "Cron de backup já configurado."
+  else
+    # Agendar para sábado às 12h
+    (crontab -l 2>/dev/null; echo "0 12 * * 6 $BACKUP_SCRIPT >> $INSTALL_DIR/instalador/backups/cron.log 2>&1") | crontab -
+    info "Backup automático agendado: sábados às 12h (máx 3 backups)"
+  fi
+
+  mkdir -p "$INSTALL_DIR/instalador/backups"
+  info "Diretório de backups: $INSTALL_DIR/instalador/backups/"
+}
+
+# ─── 8. Subir containers ─────────────────────────────────────
 start_services() {
   cd "$INSTALL_DIR/instalador"
 
@@ -275,6 +293,7 @@ start_services() {
   info "  🔌 API REST:   http://$SERVER_IP:8000/rest/v1/"
   info "  🔐 Auth:       http://$SERVER_IP:8000/auth/v1/"
   info "  🗄️  PostgreSQL: $SERVER_IP:5432"
+  info "  💾 Backups:    Sábados às 12h (máx 3)"
   echo ""
   warn "  Para acesso externo, configure Cloudflare Tunnel"
   warn "  ou Tailscale. Veja o guia em public/guia-deploy-casaos.md"
@@ -295,6 +314,7 @@ main() {
   configure_env
   generate_init_sql
   build_app
+  setup_backup
   start_services
 }
 

@@ -6,11 +6,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Plus, Trash2, Search, Filter, Download, Upload, Pencil, AlertTriangle, CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { exportTransactionsCSV, parseNubankCSV } from "@/lib/csv-utils";
 import { useNavigate } from "react-router-dom";
+import MonthYearPicker from "@/components/MonthYearPicker";
 
 interface Transaction {
   id: string;
@@ -413,17 +415,29 @@ const Transactions = () => {
           <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => navigateMonth(-1)}>
             <ChevronLeft className="w-4 h-4" />
           </Button>
-          <button
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-foreground hover:bg-muted/60 transition-colors"
-            onClick={() => {
-              const now = new Date();
-              setFilterMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
-            }}
-            title="Ir para mês atual"
-          >
-            <CalendarDays className="w-4 h-4 text-primary" />
-            <span>{currentMonthLabel}</span>
-          </button>
+
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-foreground hover:bg-muted/60 transition-colors"
+                title="Selecionar mês e ano"
+              >
+                <CalendarDays className="w-4 h-4 text-primary" />
+                <span>{currentMonthLabel}</span>
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0 border-0 bg-transparent shadow-none" align="start">
+              <MonthYearPicker
+                year={filterYear}
+                month={filterMonthNum}
+                onSelect={(y, m) => {
+                  setFilterMonth(`${y}-${String(m).padStart(2, "0")}`);
+                }}
+                onClose={() => {}}
+              />
+            </PopoverContent>
+          </Popover>
+
           <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => navigateMonth(1)}>
             <ChevronRight className="w-4 h-4" />
           </Button>
