@@ -29,6 +29,24 @@ O script irá:
 | Auth | `http://SEU_IP:8000/auth/v1/` |
 | PostgreSQL | `SEU_IP:5432` |
 
+## Backup Automático
+
+O instalador configura backup semanal automático via cron:
+- **Quando:** Sábados às 12h
+- **Limite:** 3 backups (o mais antigo é apagado automaticamente)
+- **Onde:** `instalador/backups/`
+
+```bash
+# Executar backup manual
+./backup.sh
+
+# Ver backups existentes
+ls -lh backups/
+
+# Restaurar um backup
+gunzip -c backups/fincontrol_backup_XXXXXXXX.sql.gz | docker exec -i fincontrol-db psql -U fincontrol fincontrol
+```
+
 ## Comandos Úteis
 
 ```bash
@@ -40,12 +58,6 @@ docker compose down
 
 # Reiniciar
 docker compose up -d
-
-# Backup do banco
-docker exec fincontrol-db pg_dump -U fincontrol fincontrol > backup.sql
-
-# Restaurar backup
-docker exec -i fincontrol-db psql -U fincontrol fincontrol < backup.sql
 ```
 
 ## Acesso Externo
