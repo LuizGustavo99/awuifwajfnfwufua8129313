@@ -1,95 +1,190 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 # ══════════════════════════════════════════════════════════════
-#  FinControl – Instalador Automático para Linux / CasaOS
-#  Requisitos: curl, git  (Docker será instalado se necessário)
+#  FinControl – Instalador Automático v2.0 para Linux / CasaOS
+#  Requisitos: curl, git
 # ══════════════════════════════════════════════════════════════
 
 COLOR_GREEN="\033[1;32m"
 COLOR_YELLOW="\033[1;33m"
 COLOR_RED="\033[1;31m"
+COLOR_CYAN="\033[1;36m"
 COLOR_RESET="\033[0m"
 
 info()  { echo -e "${COLOR_GREEN}[✔]${COLOR_RESET} $*"; }
 warn()  { echo -e "${COLOR_YELLOW}[!]${COLOR_RESET} $*"; }
-error() { echo -e "${COLOR_RED}[✖]${COLOR_RESET} $*"; exit 1; }
+fail()  { echo -e "${COLOR_RED}[✖]${COLOR_RESET} $*"; }
+step()  { echo -e "\n${COLOR_CYAN}═══ $* ═══${COLOR_RESET}\n"; }
 
-INSTALL_DIR="${INSTALL_DIR:-$HOME/fincontrol}"
-REPO_URL="${REPO_URL:-}"  # Será preenchido interativamente se vazio
+# Detectar diretório do projeto (pai do instalador)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# ─── 1. Verificar / instalar Docker ──────────────────────────
+# Verificar se estamos executando de dentro do repositório clonado
+if [ ! -f "$PROJECT_DIR/package.json" ]; then
+  fail "Erro: execute este script de dentro da pasta 'instalador/' do projeto clonado."
+  fail "Exemplo: cd ~/fincontrol/instalador && ./install.sh"
+  exit 1
+fi
+
+# ─── Verificar se roda como root ou com sudo ─────────────────
+check_sudo() {
+  if [ "$EUID" -eq 0 ]; then
+    SUDO=""
+  elif command -v sudo &>/dev/null; then
+    SUDO="sudo"
+  else
+    fail "Este script precisa de permissões de root."
+    fail "Execute com: sudo ./install.sh"
+    exit 1
+  fi
+}
+
+# ─── ETAPA 1: Instalar Docker ────────────────────────────────
 install_docker() {
+  step "ETAPA 1/7 — Docker"
+
   if command -v docker &>/dev/null; then
     info "Docker já instalado: $(docker --version)"
   else
     warn "Docker não encontrado. Instalando..."
-    curl -fsSL https://get.docker.com | sudo sh
-    sudo usermod -aG docker "$USER"
-    info "Docker instalado. Pode ser necessário reiniciar a sessão."
+    curl -fsSL https://get.docker.com | $SUDO sh
+    if [ $? -ne 0 ]; then
+      fail "Falha ao instalar Docker."
+      fail "Tente manualmente: curl -fsSL https://get.docker.com | sudo sh"
+      exit 1
+    fi
+    $SUDO usermod -aG docker "$USER" 2>/dev/null || true
+    info "Docker instalado com sucesso!"
+    warn "Se der erro de permissão depois, execute: newgrp docker"
   fi
 
-  if command -v docker compose &>/dev/null || docker compose version &>/dev/null 2>&1; then
-    info "Docker Compose disponível."
+  # Verificar Docker Compose
+  if docker compose version &>/dev/null 2>&1; then
+    info "Docker Compose disponível: $(docker compose version --short 2>/dev/null || echo 'ok')"
   else
     warn "Instalando Docker Compose plugin..."
-    sudo apt-get update -qq && sudo apt-get install -y docker-compose-plugin
-    info "Docker Compose instalado."
-  fi
-}
-
-# ─── 2. Verificar / instalar Node.js ─────────────────────────
-install_node() {
-  if command -v node &>/dev/null; then
-    info "Node.js já instalado: $(node --version)"
-  else
-    warn "Node.js não encontrado. Instalando via NodeSource (LTS)..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-    info "Node.js instalado: $(node --version)"
-  fi
-}
-
-# ─── 3. Clonar ou atualizar repositório ──────────────────────
-setup_repo() {
-  if [ -d "$INSTALL_DIR/.git" ]; then
-    info "Repositório encontrado em $INSTALL_DIR. Atualizando..."
-    cd "$INSTALL_DIR"
-    git pull --ff-only || warn "git pull falhou; usando versão atual."
-  else
-    if [ -z "$REPO_URL" ]; then
-      read -rp "$(echo -e "${COLOR_YELLOW}Cole a URL do repositório Git:${COLOR_RESET} ")" REPO_URL
+    $SUDO apt-get update -qq 2>/dev/null
+    $SUDO apt-get install -y docker-compose-plugin 2>/dev/null
+    if ! docker compose version &>/dev/null 2>&1; then
+      fail "Docker Compose não pôde ser instalado automaticamente."
+      fail "Instale manualmente: https://docs.docker.com/compose/install/"
+      exit 1
     fi
-    [ -z "$REPO_URL" ] && error "URL do repositório é obrigatória."
-    git clone "$REPO_URL" "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-    info "Repositório clonado em $INSTALL_DIR"
+    info "Docker Compose instalado!"
+  fi
+
+  # Garantir que Docker daemon está rodando
+  if ! docker info &>/dev/null 2>&1; then
+    warn "Iniciando Docker daemon..."
+    $SUDO systemctl start docker 2>/dev/null || $SUDO service docker start 2>/dev/null || true
+    sleep 3
+    if ! docker info &>/dev/null 2>&1; then
+      fail "Docker não está rodando. Tente: sudo systemctl start docker"
+      exit 1
+    fi
+  fi
+  info "Docker daemon rodando."
+}
+
+# ─── ETAPA 2: Instalar Node.js ───────────────────────────────
+install_node() {
+  step "ETAPA 2/7 — Node.js"
+
+  if command -v node &>/dev/null; then
+    NODE_VERSION=$(node --version)
+    info "Node.js já instalado: $NODE_VERSION"
+
+    # Verificar se é versão 18+
+    NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v//' | cut -d. -f1)
+    if [ "$NODE_MAJOR" -lt 18 ]; then
+      warn "Versão do Node.js ($NODE_VERSION) é antiga. Recomendado v18+."
+      warn "Tentando atualizar..."
+    else
+      # Verificar npm
+      if command -v npm &>/dev/null; then
+        info "npm disponível: $(npm --version)"
+        return 0
+      fi
+    fi
+  fi
+
+  warn "Instalando Node.js 20 LTS..."
+
+  # Detectar gerenciador de pacotes
+  if command -v apt-get &>/dev/null; then
+    # Debian/Ubuntu
+    curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
+    $SUDO apt-get install -y nodejs
+  elif command -v dnf &>/dev/null; then
+    # Fedora/RHEL
+    curl -fsSL https://rpm.nodesource.com/setup_20.x | $SUDO bash -
+    $SUDO dnf install -y nodejs
+  elif command -v yum &>/dev/null; then
+    # CentOS
+    curl -fsSL https://rpm.nodesource.com/setup_20.x | $SUDO bash -
+    $SUDO yum install -y nodejs
+  else
+    # Fallback: instalar via nvm
+    warn "Gerenciador de pacotes não detectado. Usando método alternativo..."
+    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+    nvm install 20
+    nvm use 20
+  fi
+
+  # Verificar instalação
+  if command -v node &>/dev/null; then
+    info "Node.js instalado: $(node --version)"
+    info "npm instalado: $(npm --version)"
+  else
+    fail "Node.js não pôde ser instalado."
+    fail "Instale manualmente: https://nodejs.org/en/download/"
+    exit 1
   fi
 }
 
-# ─── 4. Configurar variáveis ─────────────────────────────────
+# ─── ETAPA 3: Configurar variáveis ──────────────────────────
 configure_env() {
-  ENV_FILE="$INSTALL_DIR/instalador/.env"
+  step "ETAPA 3/7 — Configuração"
+
+  ENV_FILE="$SCRIPT_DIR/.env"
 
   if [ -f "$ENV_FILE" ]; then
-    info "Arquivo .env já existe. Pulando configuração."
+    info "Arquivo .env já existe. Usando configuração existente."
+    source "$ENV_FILE"
+    info "  IP configurado: $(grep SERVER_IP "$ENV_FILE" 2>/dev/null | head -1 || echo 'padrão')"
     return
   fi
 
   echo ""
   warn "Configuração inicial (pressione Enter para usar os padrões)"
+  echo ""
 
-  read -rp "Senha do banco de dados [FinControl2026!]: " DB_PASS
+  # Senha do banco
+  read -rp "$(echo -e "  ${COLOR_YELLOW}Senha do banco de dados${COLOR_RESET} [FinControl2026!]: ")" DB_PASS
   DB_PASS="${DB_PASS:-FinControl2026!}"
 
-  read -rp "JWT Secret (mínimo 32 caracteres) [auto]: " JWT
+  # JWT Secret
+  read -rp "$(echo -e "  ${COLOR_YELLOW}JWT Secret (mín 32 chars)${COLOR_RESET} [auto]: ")" JWT
   if [ -z "$JWT" ]; then
-    JWT=$(openssl rand -base64 48 | tr -d '=/+' | head -c 64)
+    if command -v openssl &>/dev/null; then
+      JWT=$(openssl rand -base64 48 | tr -d '=/+' | head -c 64)
+    else
+      JWT=$(head -c 64 /dev/urandom | base64 | tr -d '=/+' | head -c 64)
+    fi
+    info "  JWT Secret gerado automaticamente."
   fi
 
   # Detectar IP local
-  LOCAL_IP=$(hostname -I | awk '{print $1}')
-  read -rp "IP do servidor [$LOCAL_IP]: " SERVER_IP
+  LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+  if [ -z "$LOCAL_IP" ]; then
+    LOCAL_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}')
+  fi
+  LOCAL_IP="${LOCAL_IP:-localhost}"
+
+  read -rp "$(echo -e "  ${COLOR_YELLOW}IP do servidor${COLOR_RESET} [$LOCAL_IP]: ")" SERVER_IP
   SERVER_IP="${SERVER_IP:-$LOCAL_IP}"
 
   cat > "$ENV_FILE" <<EOF
@@ -97,41 +192,17 @@ DB_PASSWORD=$DB_PASS
 JWT_SECRET=$JWT
 SITE_URL=http://$SERVER_IP:8080
 API_EXTERNAL_URL=http://$SERVER_IP:8000
+SERVER_IP=$SERVER_IP
 EOF
 
   info "Configuração salva em $ENV_FILE"
 }
 
-# ─── 5. Build da aplicação ────────────────────────────────────
-build_app() {
-  cd "$INSTALL_DIR"
-
-  # Ler IP do .env
-  source "$INSTALL_DIR/instalador/.env" 2>/dev/null || true
-
-  # Criar .env para o Vite
-  cat > .env.local <<EOF
-VITE_SUPABASE_URL=${API_EXTERNAL_URL:-http://localhost:8000}
-VITE_SUPABASE_PUBLISHABLE_KEY=local
-VITE_SUPABASE_PROJECT_ID=local
-EOF
-
-  info "Instalando dependências..."
-  npm ci --silent
-
-  info "Fazendo build de produção..."
-  npm run build
-
-  # Copiar dist para pasta do instalador
-  rm -rf "$INSTALL_DIR/instalador/dist"
-  cp -r "$INSTALL_DIR/dist" "$INSTALL_DIR/instalador/dist"
-
-  info "Build concluído e copiado para instalador/dist"
-}
-
-# ─── 6. Gerar SQL de inicialização ───────────────────────────
+# ─── ETAPA 4: Gerar SQL de inicialização ─────────────────────
 generate_init_sql() {
-  INIT_SQL="$INSTALL_DIR/instalador/init-db.sql"
+  step "ETAPA 4/7 — Schema do banco de dados"
+
+  INIT_SQL="$SCRIPT_DIR/init-db.sql"
 
   if [ -f "$INIT_SQL" ]; then
     info "init-db.sql já existe. Pulando."
@@ -144,6 +215,9 @@ generate_init_sql() {
 -- FinControl – Schema Inicial
 -- Executado automaticamente na primeira inicialização do PostgreSQL
 
+-- Extensões
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
 -- Roles para PostgREST
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN
@@ -152,9 +226,15 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN
     CREATE ROLE authenticated NOLOGIN;
   END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN
+    CREATE ROLE service_role NOLOGIN;
+  END IF;
 END $$;
 
-GRANT USAGE ON SCHEMA public TO anon, authenticated;
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+
+-- Schema auth simulado para GoTrue
+CREATE SCHEMA IF NOT EXISTS auth;
 
 -- Enum de roles
 DO $$ BEGIN
@@ -251,66 +331,155 @@ AS $$
 $$;
 
 -- Permissões
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role;
 
 SQLEOF
 
-  info "init-db.sql gerado."
+  info "init-db.sql gerado com sucesso."
 }
 
-# ─── 7. Configurar backup automático ─────────────────────────
+# ─── ETAPA 5: Build da aplicação ─────────────────────────────
+build_app() {
+  step "ETAPA 5/7 — Build da aplicação"
+
+  cd "$PROJECT_DIR"
+
+  # Ler configuração
+  source "$SCRIPT_DIR/.env" 2>/dev/null || true
+
+  # Criar .env para o Vite
+  cat > .env.local <<EOF
+VITE_SUPABASE_URL=${API_EXTERNAL_URL:-http://localhost:8000}
+VITE_SUPABASE_PUBLISHABLE_KEY=local
+VITE_SUPABASE_PROJECT_ID=local
+EOF
+
+  info "Arquivo .env.local criado para o build."
+
+  # Instalar dependências
+  info "Instalando dependências (npm install)..."
+  npm install 2>&1 | tail -3
+  if [ $? -ne 0 ]; then
+    fail "Falha ao instalar dependências."
+    fail "Tente manualmente: cd $PROJECT_DIR && npm install"
+    exit 1
+  fi
+  info "Dependências instaladas."
+
+  # Build
+  info "Fazendo build de produção (npm run build)..."
+  npm run build 2>&1 | tail -5
+  if [ ! -d "$PROJECT_DIR/dist" ]; then
+    fail "Build falhou — pasta 'dist' não foi criada."
+    fail "Tente manualmente: cd $PROJECT_DIR && npm run build"
+    exit 1
+  fi
+  info "Build concluído."
+
+  # Copiar dist para pasta do instalador
+  rm -rf "$SCRIPT_DIR/dist"
+  cp -r "$PROJECT_DIR/dist" "$SCRIPT_DIR/dist"
+  info "Arquivos copiados para instalador/dist/"
+}
+
+# ─── ETAPA 6: Configurar backup automático ───────────────────
 setup_backup() {
-  BACKUP_SCRIPT="$INSTALL_DIR/instalador/backup.sh"
-  chmod +x "$BACKUP_SCRIPT"
+  step "ETAPA 6/7 — Backup automático"
+
+  BACKUP_SCRIPT="$SCRIPT_DIR/backup.sh"
+
+  if [ -f "$BACKUP_SCRIPT" ]; then
+    chmod +x "$BACKUP_SCRIPT"
+  else
+    warn "Script de backup não encontrado. Pulando configuração de cron."
+    return
+  fi
+
+  mkdir -p "$SCRIPT_DIR/backups"
 
   # Verificar se o cron já existe
   if crontab -l 2>/dev/null | grep -q "fincontrol.*backup.sh"; then
     info "Cron de backup já configurado."
   else
-    # Agendar para sábado às 12h
-    (crontab -l 2>/dev/null; echo "0 12 * * 6 $BACKUP_SCRIPT >> $INSTALL_DIR/instalador/backups/cron.log 2>&1") | crontab -
+    (crontab -l 2>/dev/null; echo "0 12 * * 6 $BACKUP_SCRIPT >> $SCRIPT_DIR/backups/cron.log 2>&1") | crontab -
     info "Backup automático agendado: sábados às 12h (máx 3 backups)"
   fi
 
-  mkdir -p "$INSTALL_DIR/instalador/backups"
-  info "Diretório de backups: $INSTALL_DIR/instalador/backups/"
+  info "Diretório de backups: $SCRIPT_DIR/backups/"
 }
 
-# ─── 8. Subir containers ─────────────────────────────────────
+# ─── ETAPA 7: Subir containers ───────────────────────────────
 start_services() {
-  cd "$INSTALL_DIR/instalador"
+  step "ETAPA 7/7 — Subindo serviços"
 
-  info "Subindo serviços Docker..."
-  docker compose --env-file .env up -d
+  cd "$SCRIPT_DIR"
+
+  # Carregar variáveis
+  source "$SCRIPT_DIR/.env" 2>/dev/null || true
+
+  info "Iniciando containers Docker..."
+  docker compose --env-file .env up -d 2>&1
+
+  if [ $? -ne 0 ]; then
+    fail "Erro ao iniciar containers."
+    fail "Verifique os logs: docker compose logs"
+    exit 1
+  fi
+
+  # Aguardar containers ficarem prontos
+  info "Aguardando serviços iniciarem (30 segundos)..."
+  sleep 10
+
+  # Verificar containers
+  echo ""
+  RUNNING=$(docker compose ps --format '{{.Name}} {{.Status}}' 2>/dev/null | grep -c "Up" || echo "0")
+  TOTAL=$(docker compose ps --format '{{.Name}}' 2>/dev/null | wc -l || echo "0")
+
+  if [ "$RUNNING" -ge 4 ]; then
+    info "✅ $RUNNING/$TOTAL containers rodando."
+  else
+    warn "⚠️  Apenas $RUNNING/$TOTAL containers estão rodando."
+    warn "Verificando logs..."
+    docker compose ps 2>/dev/null
+    echo ""
+    warn "Execute 'docker compose logs' para ver detalhes."
+  fi
+
+  SERVER_IP="${SERVER_IP:-localhost}"
 
   echo ""
-  info "═══════════════════════════════════════════════════"
-  info "  FinControl instalado com sucesso! 🎉"
-  info "═══════════════════════════════════════════════════"
+  echo -e "${COLOR_GREEN}════════════════════════════════════════════════════${COLOR_RESET}"
+  echo -e "${COLOR_GREEN}   FinControl instalado com sucesso! 🎉${COLOR_RESET}"
+  echo -e "${COLOR_GREEN}════════════════════════════════════════════════════${COLOR_RESET}"
   echo ""
-  info "  🌐 Aplicação:  http://$SERVER_IP:8080"
-  info "  🔌 API REST:   http://$SERVER_IP:8000/rest/v1/"
-  info "  🔐 Auth:       http://$SERVER_IP:8000/auth/v1/"
-  info "  🗄️  PostgreSQL: $SERVER_IP:5432"
-  info "  💾 Backups:    Sábados às 12h (máx 3)"
+  echo -e "  🌐 Aplicação:  ${COLOR_CYAN}http://$SERVER_IP:8080${COLOR_RESET}"
+  echo -e "  🔌 API REST:   ${COLOR_CYAN}http://$SERVER_IP:8000/rest/v1/${COLOR_RESET}"
+  echo -e "  🔐 Auth:       ${COLOR_CYAN}http://$SERVER_IP:8000/auth/v1/${COLOR_RESET}"
+  echo -e "  🗄️  PostgreSQL: ${COLOR_CYAN}$SERVER_IP:5432${COLOR_RESET}"
+  echo -e "  💾 Backups:    Sábados às 12h (máx 3)"
   echo ""
-  warn "  Para acesso externo, configure Cloudflare Tunnel"
-  warn "  ou Tailscale. Veja o guia em public/guia-deploy-casaos.md"
+  echo -e "  ${COLOR_YELLOW}Próximo passo: criar o primeiro usuário.${COLOR_RESET}"
+  echo -e "  ${COLOR_YELLOW}Veja o guia completo: public/guia-instalacao-casaos.md${COLOR_RESET}"
   echo ""
 }
 
 # ─── MAIN ─────────────────────────────────────────────────────
 main() {
   echo ""
-  echo "════════════════════════════════════════════════════"
-  echo "   FinControl – Instalador Automático v1.0"
-  echo "════════════════════════════════════════════════════"
+  echo -e "${COLOR_CYAN}════════════════════════════════════════════════════${COLOR_RESET}"
+  echo -e "${COLOR_CYAN}   FinControl – Instalador Automático v2.0${COLOR_RESET}"
+  echo -e "${COLOR_CYAN}════════════════════════════════════════════════════${COLOR_RESET}"
+  echo ""
+  echo -e "  Diretório do projeto: ${COLOR_GREEN}$PROJECT_DIR${COLOR_RESET}"
+  echo -e "  Diretório instalador: ${COLOR_GREEN}$SCRIPT_DIR${COLOR_RESET}"
   echo ""
 
+  check_sudo
   install_docker
   install_node
-  setup_repo
   configure_env
   generate_init_sql
   build_app
