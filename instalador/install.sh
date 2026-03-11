@@ -436,9 +436,11 @@ provision_admin() {
     # Tentar extrair ID mesmo de resposta de erro (usuário já existe)
     if echo "$SIGNUP_RESPONSE" | grep -q "already registered\|already exists\|duplicate"; then
       warn "Usuário já existe. Buscando ID no banco..."
-      USER_ID=$(docker exec fincontrol-db psql -U fincontrol -d fincontrol -t -A \
-        -c "SELECT id FROM auth.users WHERE email='$ADMIN_EMAIL' LIMIT 1;" 2>/dev/null | tr -d '[:space:]')
     fi
+
+    # Buscar ID diretamente no banco
+    USER_ID=$(docker exec fincontrol-db psql -U fincontrol -d fincontrol -t -A \
+      -c "SELECT id FROM auth.users WHERE email='$ADMIN_EMAIL' LIMIT 1;" 2>/dev/null | tr -d '[:space:]')
 
     if [ -z "$USER_ID" ]; then
       fail "Não foi possível criar ou encontrar o usuário admin."
@@ -448,6 +450,12 @@ provision_admin() {
   fi
 
   info "Usuário criado com ID: $USER_ID"
+
+  # ─── GARANTIR confirmação do e-mail (fix para AUTOCONFIRM falhar) ───
+  info "Confirmando e-mail do admin no banco..."
+  docker exec fincontrol-db psql -U fincontrol -d fincontrol -c \
+    "UPDATE auth.users SET email_confirmed_at = now(), updated_at = now() WHERE id = '$USER_ID' AND email_confirmed_at IS NULL;" 2>/dev/null
+  info "✅ E-mail confirmado via SQL."
 
   # Atribuir role admin
   info "Atribuindo role admin..."
